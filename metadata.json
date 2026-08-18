@@ -1,0 +1,6 @@
+{
+  "name": "Banco de Imagens e Cadastro de Suspeitos",
+  "description": "Sistema profissional de cadastro de suspeitos e banco de imagens para a área de inteligência policial com controle de acesso, aprovação de operadores e detalhamento de fichas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

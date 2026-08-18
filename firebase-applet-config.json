@@ -1,0 +1,12 @@
+{
+  "projectId": "segint",
+  "appId": "1:962467301106:web:6a9d97dfe25f91fa38726b",
+  "apiKey": "AIzaSyAlf0XHG3TPnmfkZTkmfTHewdPWwqnq0LE",
+  "authDomain": "segint.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "segint.firebasestorage.app",
+  "messagingSenderId": "962467301106",
+  "measurementId": "G-XJRMEVB7V9",
+  "oAuthClientId": "",
+  "recaptchaSiteKey": ""
+}
