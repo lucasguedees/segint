@@ -166,13 +166,18 @@ export async function createUserProfile(
     return profile;
   }
   try {
-    // Check if this is the first user to bootstrap as admin
-    const usersRef = collection(db, "users");
-    const snapshot = await getDocs(usersRef);
-    const isEmpty = snapshot.empty;
-
-    // Default to 'user' and 'pending' unless it is the workspace owner or the first user
     const isOwner = email.toLowerCase() === "lucas2305rj1994@gmail.com";
+    let isEmpty = false;
+    try {
+      const usersRef = collection(db, "users");
+      const snapshot = await getDocs(usersRef);
+      isEmpty = snapshot.empty;
+    } catch {
+      // If collection read is restricted before user document creation, fallback safely
+      isEmpty = isOwner;
+    }
+
+    // Default to 'admin' and 'approved' for workspace owner or first user
     const role: UserRole = isOwner || isEmpty ? "admin" : "user";
     const status: UserStatus = isOwner || isEmpty ? "approved" : "pending";
 
@@ -530,7 +535,7 @@ export async function seedSuspectsIfEmpty(): Promise<void> {
     const suspectsRef = collection(db, "suspects");
     const snapshot = await getDocs(suspectsRef);
     if (snapshot.empty) {
-      console.log("Banco de suspeitos vazio. Sembrando dados padrão...");
+      console.log("Banco de suspeitos vazio. Alimentando dados padrão...");
       const batch = writeBatch(db);
       MOCK_SUSPECTS.forEach((suspect) => {
         const docRef = doc(db, "suspects", suspect.id);
@@ -540,8 +545,12 @@ export async function seedSuspectsIfEmpty(): Promise<void> {
       console.log("Banco de suspeitos alimentado com sucesso.");
     }
   } catch (error) {
-    console.error("Erro ao sembrar suspeitos padrão:", error);
+    console.warn("Aviso ao verificar/popular suspeitos padrão:", error);
   }
+}
+
+export async function populateInitialMocks(): Promise<void> {
+  await Promise.all([seedSuspectsIfEmpty(), seedOccurrencesIfEmpty()]);
 }
 
 // --- Occurrences Services ---

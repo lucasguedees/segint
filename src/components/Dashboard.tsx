@@ -8,6 +8,7 @@ import {
   updateSuspect,
   deleteSuspect,
   seedSuspectsIfEmpty,
+  seedOccurrencesIfEmpty,
   subscribeToOccurrences,
   addOccurrence,
   subscribeToAllUsers,
@@ -522,6 +523,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
 
   // Listen to occurrences
   useEffect(() => {
+    seedOccurrencesIfEmpty();
     const unsubscribe = subscribeToOccurrences((allOccurrences) => {
       setOccurrences(allOccurrences);
     });
