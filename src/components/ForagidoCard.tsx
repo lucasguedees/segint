@@ -42,6 +42,8 @@ export default function ForagidoCard({ suspect, onViewFicha, onEdit }: ForagidoC
             <img
               src={primaryPhoto}
               alt={suspect.name}
+              loading="lazy"
+              decoding="async"
               referrerPolicy="no-referrer"
               className={`w-full h-full object-cover transition-transform duration-500 ${
                 suspect.coverFocus3x4 ? "scale-[1.65] origin-[center_18%]" : ""

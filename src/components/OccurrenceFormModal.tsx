@@ -21,6 +21,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { motion } from "motion/react";
+import { compressImageFile, compressBase64Image } from "../utils/imageOptimizer";
 
 interface OccurrenceFormModalProps {
   editingOccurrence?: Occurrence | null;
@@ -114,7 +115,7 @@ export default function OccurrenceFormModal({
 
   // Global paste handler (Ctrl+V) anywhere inside the modal
   useEffect(() => {
-    const handleGlobalPaste = (e: ClipboardEvent) => {
+    const handleGlobalPaste = async (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (items) {
         for (let i = 0; i < items.length; i++) {
@@ -122,15 +123,11 @@ export default function OccurrenceFormModal({
             const file = items[i].getAsFile();
             if (file) {
               e.preventDefault();
-              const reader = new FileReader();
-              reader.onload = (event) => {
-                if (event.target?.result) {
-                  const dataUrl = event.target.result as string;
-                  setManualPhoto(dataUrl);
-                  if (showToast) showToast("Foto do envolvido colada da área de transferência!", "success");
-                }
-              };
-              reader.readAsDataURL(file);
+              const optimized = await compressImageFile(file, 800, 800, 0.78);
+              if (optimized) {
+                setManualPhoto(optimized);
+                if (showToast) showToast("Foto do envolvido colada e otimizada!", "success");
+              }
               return;
             }
           }
@@ -145,38 +142,32 @@ export default function OccurrenceFormModal({
   }, [showToast]);
 
   // File Upload Handlers
-  const handleFileUpload = (
+  const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: (val: string) => void
   ) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setter(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+      const optimized = await compressImageFile(file, 800, 800, 0.78);
+      if (optimized) {
+        setter(optimized);
+      }
     }
   };
 
-  const handleExtraFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleExtraFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setExtraPhotos((prev) => [...prev, event.target!.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
+      const optimized = await compressImageFile(file, 800, 800, 0.78);
+      if (optimized) {
+        setExtraPhotos((prev) => [...prev, optimized]);
+      }
     }
   };
 
   const handlePasteClipboard = async (setter: (val: string) => void) => {
     try {
-      // 1. Try reading direct binary image from Clipboard API (e.g. screenshot or copied image file)
+      // 1. Try reading direct binary image from Clipboard API
       if (navigator.clipboard && typeof navigator.clipboard.read === "function") {
         try {
           const clipboardItems = await navigator.clipboard.read();
@@ -184,15 +175,13 @@ export default function OccurrenceFormModal({
             const imageType = item.types.find((t) => t.startsWith("image/"));
             if (imageType) {
               const blob = await item.getType(imageType);
-              const reader = new FileReader();
-              reader.onload = (event) => {
-                if (event.target?.result) {
-                  setter(event.target.result as string);
-                  if (showToast) showToast("Imagem colada com sucesso!", "success");
-                }
-              };
-              reader.readAsDataURL(blob);
-              return;
+              const file = new File([blob], "clipboard.jpg", { type: blob.type });
+              const optimized = await compressImageFile(file, 800, 800, 0.78);
+              if (optimized) {
+                setter(optimized);
+                if (showToast) showToast("Imagem colada com sucesso!", "success");
+                return;
+              }
             }
           }
         } catch (err) {
@@ -204,7 +193,13 @@ export default function OccurrenceFormModal({
       if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
         const text = await navigator.clipboard.readText();
         if (text && text.trim()) {
-          setter(text.trim());
+          const trimmed = text.trim();
+          if (trimmed.startsWith("data:image")) {
+            const optimized = await compressBase64Image(trimmed, 800, 800, 0.78);
+            setter(optimized);
+          } else {
+            setter(trimmed);
+          }
           if (showToast) showToast("Link da imagem colado com sucesso!", "info");
           return;
         }

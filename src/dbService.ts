@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { UserProfile, Suspect, UserRole, UserStatus, Occurrence } from "./types";
 import { MOCK_SUSPECTS, MOCK_OCCURRENCES } from "./constants";
+import { compressBase64Image } from "./utils/imageOptimizer";
 
 // --- IndexedDB & Storage Optimization Helpers ---
 const IDB_NAME = "sispir_local_db";
@@ -332,7 +333,20 @@ function cleanDocForFirestore<T extends Record<string, any>>(obj: T): T {
 // --- Suspects Services ---
 
 export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
-  // 1. Immediately hydrate from local database so the screen is never blank
+  // 1. Instantly hydrate from synchronous localStorage if available (0ms load)
+  try {
+    const rawLocal = localStorage.getItem("sispir_local_suspects");
+    if (rawLocal) {
+      const parsed = JSON.parse(rawLocal);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        onUpdate(parsed);
+      }
+    }
+  } catch (e) {
+    // Ignore synchronous parse errors and proceed to IDB
+  }
+
+  // 2. Hydrate from IndexedDB for rich full-resolution local database
   idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
     if (local && local.length > 0) {
       onUpdate(local);
@@ -349,7 +363,7 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
   window.addEventListener("sispir_local_suspects_update", handleCustomLocalUpdate);
 
   const suspectsRef = collection(db, "suspects");
-  // Query all documents directly without restrictive index filtering
+  // Query all documents with fallback
   const unsubscribeFirestore = onSnapshot(
     suspectsRef,
     (snapshot) => {
@@ -371,6 +385,7 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
       // If Firestore returned documents, sync to local and update
       if (suspects.length > 0) {
         idbSet("sispir_local_suspects", suspects);
+        safeSetLocalStorage("sispir_local_suspects", suspects);
         onUpdate(suspects);
       } else {
         // Fallback to local mocks if Firestore has 0 documents
@@ -384,7 +399,7 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
       }
     },
     (error) => {
-      console.warn("Aviso na assinatura de suspeitos Firestore:", error);
+      console.warn("Aviso na assinatura de suspeitos Firestore (operando offline):", error);
       idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
         if (local && local.length > 0) {
           onUpdate(local);
@@ -403,21 +418,29 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
 
 export async function addSuspect(suspect: Omit<Suspect, "createdAt" | "updatedAt">): Promise<void> {
   const suspectId = suspect.id || `SUSP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  
+  // Compress photos if base64 before writing
+  let optimizedPhotos: string[] = [];
+  if (Array.isArray(suspect.photos)) {
+    optimizedPhotos = await Promise.all(
+      suspect.photos.filter(Boolean).map(async (p) => {
+        if (typeof p === "string" && p.startsWith("data:image")) {
+          return await compressBase64Image(p, 800, 800, 0.78);
+        }
+        return p;
+      })
+    );
+  }
+
   const fullSuspect: Suspect = cleanDocForFirestore({
     ...suspect,
+    photos: optimizedPhotos,
     id: suspectId,
     createdAt: (suspect as any).createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
 
-  try {
-    const suspectRef = doc(db, "suspects", fullSuspect.id);
-    await setDoc(suspectRef, fullSuspect, { merge: true });
-  } catch (error) {
-    console.error("Erro ao gravar suspeito no Firestore:", error);
-  }
-
-  // Also maintain local mirror
+  // Maintain local mirror immediately (0ms UI latency)
   try {
     let local = (await idbGet<Suspect[]>("sispir_local_suspects")) || [];
     const idx = local.findIndex((s) => s.id === fullSuspect.id);
@@ -429,24 +452,39 @@ export async function addSuspect(suspect: Omit<Suspect, "createdAt" | "updatedAt
   } catch (e) {
     console.error("Erro no cache local do suspeito:", e);
   }
+
+  try {
+    const suspectRef = doc(db, "suspects", fullSuspect.id);
+    await setDoc(suspectRef, fullSuspect, { merge: true });
+  } catch (error) {
+    console.error("Erro ao gravar suspeito no Firestore:", error);
+  }
 }
 
 export async function updateSuspect(
   suspectId: string,
   suspectData: Partial<Omit<Suspect, "id" | "createdAt" | "createdBy">>
 ): Promise<void> {
+  // Compress photos if updated
+  let optimizedPhotos = suspectData.photos;
+  if (Array.isArray(optimizedPhotos)) {
+    optimizedPhotos = await Promise.all(
+      optimizedPhotos.filter(Boolean).map(async (p) => {
+        if (typeof p === "string" && p.startsWith("data:image")) {
+          return await compressBase64Image(p, 800, 800, 0.78);
+        }
+        return p;
+      })
+    );
+  }
+
   const updatePayload = cleanDocForFirestore({
     ...suspectData,
+    ...(optimizedPhotos ? { photos: optimizedPhotos } : {}),
     updatedAt: new Date().toISOString(),
   });
 
-  try {
-    const suspectRef = doc(db, "suspects", suspectId);
-    await setDoc(suspectRef, updatePayload, { merge: true });
-  } catch (error) {
-    console.error("Erro ao atualizar suspeito no Firestore:", error);
-  }
-
+  // Maintain local mirror immediately
   try {
     let local = (await idbGet<Suspect[]>("sispir_local_suspects")) || [];
     const idx = local.findIndex((s) => s.id === suspectId);
@@ -458,6 +496,13 @@ export async function updateSuspect(
     }
   } catch (e) {
     console.error("Erro ao atualizar cache local do suspeito:", e);
+  }
+
+  try {
+    const suspectRef = doc(db, "suspects", suspectId);
+    await setDoc(suspectRef, updatePayload, { merge: true });
+  } catch (error) {
+    console.error("Erro ao atualizar suspeito no Firestore:", error);
   }
 }
 
@@ -691,7 +736,20 @@ export async function populateInitialMocks(): Promise<void> {
 // --- Occurrences Services ---
 
 export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => void) {
-  // 1. Immediately load local data
+  // 1. Instantly hydrate from synchronous localStorage if available (0ms load)
+  try {
+    const rawLocal = localStorage.getItem("sispir_local_occurrences");
+    if (rawLocal) {
+      const parsed = JSON.parse(rawLocal);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        onUpdate(parsed);
+      }
+    }
+  } catch (e) {
+    // Ignore synchronous parse errors and proceed to IDB
+  }
+
+  // 2. Immediately load local IndexedDB data
   idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
     if (local && local.length > 0) {
       onUpdate(local);
@@ -728,6 +786,7 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
 
       if (occurrences.length > 0) {
         idbSet("sispir_local_occurrences", occurrences);
+        safeSetLocalStorage("sispir_local_occurrences", occurrences);
         onUpdate(occurrences);
       } else {
         idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
@@ -740,7 +799,7 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
       }
     },
     (error) => {
-      console.warn("Aviso na assinatura de ocorrências Firestore:", error);
+      console.warn("Aviso na assinatura de ocorrências Firestore (operando offline):", error);
       idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
         if (local && local.length > 0) {
           onUpdate(local);
@@ -787,23 +846,31 @@ export async function seedOccurrencesIfEmpty(): Promise<void> {
 
 export async function addOccurrence(occurrence: Omit<Occurrence, "createdAt" | "updatedAt">): Promise<void> {
   const occId = occurrence.id || `OCOR-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  
+  // Compress photos
+  let optimizedPhotos: string[] = [];
+  const rawPhotos = Array.isArray(occurrence.photos) ? occurrence.photos.filter(Boolean) : occurrence.photoUrl ? [occurrence.photoUrl] : [];
+  optimizedPhotos = await Promise.all(
+    rawPhotos.map(async (p) => {
+      if (typeof p === "string" && p.startsWith("data:image")) {
+        return await compressBase64Image(p, 800, 800, 0.78);
+      }
+      return p;
+    })
+  );
+
   const fullOccurrence: Occurrence = cleanDocForFirestore({
     ...occurrence,
     id: occId,
-    photos: Array.isArray(occurrence.photos) ? occurrence.photos.filter(Boolean) : occurrence.photoUrl ? [occurrence.photoUrl] : [],
+    photos: optimizedPhotos,
+    photoUrl: optimizedPhotos[0] || occurrence.photoUrl || "",
     involvedPeople: Array.isArray(occurrence.involvedPeople) ? occurrence.involvedPeople : [],
     relatedSuspects: Array.isArray(occurrence.relatedSuspects) ? occurrence.relatedSuspects : [],
     createdAt: (occurrence as any).createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
 
-  try {
-    const occurrenceRef = doc(db, "occurrences", fullOccurrence.id);
-    await setDoc(occurrenceRef, fullOccurrence, { merge: true });
-  } catch (error) {
-    console.error("Erro ao gravar ocorrência no Firestore:", error);
-  }
-
+  // Mirror locally immediately
   try {
     let local = (await idbGet<Occurrence[]>("sispir_local_occurrences")) || [];
     const idx = local.findIndex((o) => o.id === fullOccurrence.id);
@@ -815,24 +882,38 @@ export async function addOccurrence(occurrence: Omit<Occurrence, "createdAt" | "
   } catch (e) {
     console.error("Erro ao atualizar cache local da ocorrência:", e);
   }
+
+  try {
+    const occurrenceRef = doc(db, "occurrences", fullOccurrence.id);
+    await setDoc(occurrenceRef, fullOccurrence, { merge: true });
+  } catch (error) {
+    console.error("Erro ao gravar ocorrência no Firestore:", error);
+  }
 }
 
 export async function updateOccurrence(
   occurrenceId: string,
   occurrenceData: Partial<Omit<Occurrence, "id" | "createdAt">>
 ): Promise<void> {
+  let optimizedPhotos = occurrenceData.photos;
+  if (Array.isArray(optimizedPhotos)) {
+    optimizedPhotos = await Promise.all(
+      optimizedPhotos.filter(Boolean).map(async (p) => {
+        if (typeof p === "string" && p.startsWith("data:image")) {
+          return await compressBase64Image(p, 800, 800, 0.78);
+        }
+        return p;
+      })
+    );
+  }
+
   const updatePayload = cleanDocForFirestore({
     ...occurrenceData,
+    ...(optimizedPhotos ? { photos: optimizedPhotos } : {}),
     updatedAt: new Date().toISOString(),
   });
 
-  try {
-    const occurrenceRef = doc(db, "occurrences", occurrenceId);
-    await setDoc(occurrenceRef, updatePayload, { merge: true });
-  } catch (error) {
-    console.error("Erro ao atualizar ocorrência no Firestore:", error);
-  }
-
+  // Mirror locally immediately
   try {
     let local = (await idbGet<Occurrence[]>("sispir_local_occurrences")) || [];
     const idx = local.findIndex((o) => o.id === occurrenceId);
@@ -844,6 +925,13 @@ export async function updateOccurrence(
     }
   } catch (e) {
     console.error("Erro ao atualizar cache local da ocorrência:", e);
+  }
+
+  try {
+    const occurrenceRef = doc(db, "occurrences", occurrenceId);
+    await setDoc(occurrenceRef, updatePayload, { merge: true });
+  } catch (error) {
+    console.error("Erro ao atualizar ocorrência no Firestore:", error);
   }
 }
 

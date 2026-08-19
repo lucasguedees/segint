@@ -91,6 +91,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
   const [suspects, setSuspects] = useState<Suspect[]>([]);
   const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
   const [loading, setLoading] = useState(true);
+  const [visibleCount, setVisibleCount] = useState<number>(36);
 
   // Admin and Real-time Operator Registration Notification state
   const [pendingUsers, setPendingUsers] = useState<UserProfile[]>([]);
@@ -636,12 +637,20 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
 
   // Listen to suspects
   useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      setLoading(false);
+    }, 500);
+
     const unsubscribe = subscribeToSuspects((allSuspects) => {
       setSuspects(allSuspects);
       setLoading(false);
+      clearTimeout(safetyTimer);
     });
 
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(safetyTimer);
+      unsubscribe();
+    };
   }, []);
 
   // Listen to occurrences
@@ -1125,6 +1134,11 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     });
   };
 
+  // Reset pagination count when active filters or tab change
+  useEffect(() => {
+    setVisibleCount(36);
+  }, [searchQuery, cityFilter, factionFilter, suspectSortOrder, activeTab]);
+
   // Filter suspects using Smart Multi-Field Search Engine
   const baseFilteredSuspects = suspects.filter((s) => {
     const matchesQuery = matchesSuspectSmartSearch(s, searchQuery, occurrences);
@@ -1137,6 +1151,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     return matchesQuery && matchesFaction && matchesCity;
   });
   const filteredSuspects = sortSuspectsList(baseFilteredSuspects, suspectSortOrder);
+  const displayedSuspects = filteredSuspects.slice(0, visibleCount);
 
   // Filter suspects for Alvo em Foco and Foragido tabs
   const baseFilteredAlvos = suspects.filter((s) => s.alvoEmFoco).filter((s) => {
@@ -1145,6 +1160,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     return matchesQuery && matchesFaction;
   });
   const filteredAlvos = sortSuspectsList(baseFilteredAlvos, suspectSortOrder);
+  const displayedAlvos = filteredAlvos.slice(0, visibleCount);
 
   const baseFilteredForagidos = suspects.filter((s) => s.foragido).filter((s) => {
     const matchesQuery = matchesSuspectSmartSearch(s, searchQuery, occurrences);
@@ -1152,6 +1168,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     return matchesQuery && matchesFaction;
   });
   const filteredForagidos = sortSuspectsList(baseFilteredForagidos, suspectSortOrder);
+  const displayedForagidos = filteredForagidos.slice(0, visibleCount);
 
   const filteredReincidentes = suspects
     .map((s) => {
@@ -1171,6 +1188,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
       const matchesFaction = factionFilter === "all" || s.faction === factionFilter;
       return matchesQuery && matchesFaction;
     });
+  const displayedReincidentes = filteredReincidentes.slice(0, visibleCount);
 
   return (
     <div id="dashboard-container" className="h-screen max-h-screen overflow-hidden bg-gradient-to-br from-[#050507] to-[#0a0a0f] text-[#e0e0e0] flex flex-col font-sans select-none relative">
@@ -2111,7 +2129,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                         gridTemplateColumns: `repeat(auto-fill, minmax(${photoSize}px, 1fr))`,
                       }}
                     >
-                      {filteredSuspects.map((suspect, idx) => (
+                      {displayedSuspects.map((suspect, idx) => (
                         <SuspectCard
                           key={`s-m1-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2133,7 +2151,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                         gridTemplateColumns: `repeat(auto-fill, minmax(${photoSize}px, 1fr))`,
                       }}
                     >
-                      {filteredSuspects.map((suspect, idx) => (
+                      {displayedSuspects.map((suspect, idx) => (
                         <SuspectCard
                           key={`s-m2-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2155,7 +2173,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                         gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(photoSize, 280)}px, 1fr))`,
                       }}
                     >
-                      {filteredSuspects.map((suspect, idx) => (
+                      {displayedSuspects.map((suspect, idx) => (
                         <SuspectCard
                           key={`s-m3-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2169,6 +2187,19 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                           hideDetails={false}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* Progressive pagination button */}
+                  {filteredSuspects.length > displayedSuspects.length && (
+                    <div className="flex justify-center pt-8 pb-4">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((prev) => prev + 36)}
+                        className="px-6 py-3 bg-[#131929] hover:bg-[#1c253b] border border-[#202a3f] hover:border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <span>Carregar Mais Suspeitos (Exibindo {displayedSuspects.length} de {filteredSuspects.length})</span>
+                      </button>
                     </div>
                   )}
                 </>
@@ -2259,7 +2290,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                      {filteredAlvos.map((suspect, idx) => (
+                      {displayedAlvos.map((suspect, idx) => (
                         <AlvoFocoCard
                           key={`alvo-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2270,6 +2301,19 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                           }}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* Progressive pagination button */}
+                  {filteredAlvos.length > displayedAlvos.length && (
+                    <div className="flex justify-center pt-8 pb-4">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((prev) => prev + 36)}
+                        className="px-6 py-3 bg-[#131929] hover:bg-[#1c253b] border border-rose-500/20 hover:border-rose-500/50 text-rose-400 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <span>Carregar Mais Alvos (Exibindo {displayedAlvos.length} de {filteredAlvos.length})</span>
+                      </button>
                     </div>
                   )}
                 </>
@@ -2360,7 +2404,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                      {filteredForagidos.map((suspect, idx) => (
+                      {displayedForagidos.map((suspect, idx) => (
                         <ForagidoCard
                           key={`foragido-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2371,6 +2415,19 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                           }}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* Progressive pagination button */}
+                  {filteredForagidos.length > displayedForagidos.length && (
+                    <div className="flex justify-center pt-8 pb-4">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((prev) => prev + 36)}
+                        className="px-6 py-3 bg-[#131929] hover:bg-[#1c253b] border border-amber-500/20 hover:border-amber-500/50 text-amber-400 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <span>Carregar Mais Foragidos (Exibindo {displayedForagidos.length} de {filteredForagidos.length})</span>
+                      </button>
                     </div>
                   )}
                 </>
@@ -2461,7 +2518,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                      {filteredReincidentes.map(({ suspect }, idx) => (
+                      {displayedReincidentes.map(({ suspect }, idx) => (
                         <ReincidenteCard
                           key={`reinc-${suspect.id || "s"}-${idx}`}
                           suspect={suspect}
@@ -2474,6 +2531,19 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
                           }}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* Progressive pagination button */}
+                  {filteredReincidentes.length > displayedReincidentes.length && (
+                    <div className="flex justify-center pt-8 pb-4">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((prev) => prev + 36)}
+                        className="px-6 py-3 bg-[#131929] hover:bg-[#1c253b] border border-amber-500/20 hover:border-amber-500/50 text-amber-400 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <span>Carregar Mais Reincidentes (Exibindo {displayedReincidentes.length} de {filteredReincidentes.length})</span>
+                      </button>
                     </div>
                   )}
                 </>

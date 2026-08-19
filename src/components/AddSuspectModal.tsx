@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { checkSuspectDuplicates, SuspectDuplicateMatch } from "../utils/suspectSearch";
+import { compressImageFile, compressBase64Image } from "../utils/imageOptimizer";
 
 interface AddSuspectModalProps {
   suspectToEdit?: Suspect; // Provided if editing
@@ -138,7 +139,7 @@ export default function AddSuspectModal({
     }
   };
 
-  const captureGalleryPhoto = () => {
+  const captureGalleryPhoto = async () => {
     if (galleryVideoRef.current) {
       const canvas = window.document.createElement("canvas");
       canvas.width = galleryVideoRef.current.videoWidth || 640;
@@ -146,23 +147,21 @@ export default function AddSuspectModal({
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(galleryVideoRef.current, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg");
-        setGalleryTempPhotoUrl(dataUrl);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
+        const optimized = await compressBase64Image(dataUrl, 800, 800, 0.78);
+        setGalleryTempPhotoUrl(optimized);
         stopGalleryCamera();
       }
     }
   };
 
-  const handleGalleryFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleGalleryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setGalleryTempPhotoUrl(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+      const optimized = await compressImageFile(file, 800, 800, 0.78);
+      if (optimized) {
+        setGalleryTempPhotoUrl(optimized);
+      }
     }
   };
 
@@ -194,7 +193,7 @@ export default function AddSuspectModal({
 
   // Global paste handler (Ctrl+V) anywhere inside the modal
   useEffect(() => {
-    const handleGlobalPaste = (e: ClipboardEvent) => {
+    const handleGlobalPaste = async (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (items) {
         for (let i = 0; i < items.length; i++) {
@@ -202,14 +201,11 @@ export default function AddSuspectModal({
             const file = items[i].getAsFile();
             if (file) {
               e.preventDefault();
-              const reader = new FileReader();
-              reader.onload = (event) => {
-                if (event.target?.result) {
-                  setCustomPhotoUrl(event.target.result as string);
-                  setUseCustomPhoto(true);
-                }
-              };
-              reader.readAsDataURL(file);
+              const optimized = await compressImageFile(file, 800, 800, 0.78);
+              if (optimized) {
+                setCustomPhotoUrl(optimized);
+                setUseCustomPhoto(true);
+              }
               break;
             }
           }
@@ -272,7 +268,7 @@ export default function AddSuspectModal({
   };
 
   // Capture photo from video stream
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (videoRef.current) {
       const canvas = window.document.createElement("canvas");
       canvas.width = videoRef.current.videoWidth || 640;
@@ -280,8 +276,9 @@ export default function AddSuspectModal({
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg");
-        setCustomPhotoUrl(dataUrl);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
+        const optimized = await compressBase64Image(dataUrl, 800, 800, 0.78);
+        setCustomPhotoUrl(optimized);
         setUseCustomPhoto(true);
         stopCamera();
       }
@@ -289,36 +286,31 @@ export default function AddSuspectModal({
   };
 
   // Handle files (browsed)
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setCustomPhotoUrl(event.target.result as string);
-          setUseCustomPhoto(true);
-        }
-      };
-      reader.readAsDataURL(file);
+      const optimized = await compressImageFile(file, 800, 800, 0.78);
+      if (optimized) {
+        setCustomPhotoUrl(optimized);
+        setUseCustomPhoto(true);
+      }
     }
   };
 
   // Handle paste events on our dedicated paste container
-  const handlePasteEvent = (e: React.ClipboardEvent) => {
+  const handlePasteEvent = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (items) {
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf("image") !== -1) {
           const file = items[i].getAsFile();
           if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              if (event.target?.result) {
-                setCustomPhotoUrl(event.target.result as string);
-                setUseCustomPhoto(true);
-              }
-            };
-            reader.readAsDataURL(file);
+            const optimized = await compressImageFile(file, 800, 800, 0.78);
+            if (optimized) {
+              setCustomPhotoUrl(optimized);
+              setUseCustomPhoto(true);
+            }
+            break;
           }
         }
       }
@@ -333,15 +325,13 @@ export default function AddSuspectModal({
         const imageTypes = item.types.filter(type => type.startsWith("image/"));
         if (imageTypes.length > 0) {
           const blob = await item.getType(imageTypes[0]);
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            if (event.target?.result) {
-              setCustomPhotoUrl(event.target.result as string);
-              setUseCustomPhoto(true);
-            }
-          };
-          reader.readAsDataURL(blob);
-          return;
+          const file = new File([blob], "clipboard.jpg", { type: blob.type });
+          const optimized = await compressImageFile(file, 800, 800, 0.78);
+          if (optimized) {
+            setCustomPhotoUrl(optimized);
+            setUseCustomPhoto(true);
+            return;
+          }
         }
       }
     } catch (err) {
@@ -352,7 +342,12 @@ export default function AddSuspectModal({
       const text = await navigator.clipboard.readText();
       if (text && text.trim()) {
         const trimmed = text.trim();
-        if (trimmed.startsWith("data:image") || trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        if (trimmed.startsWith("data:image")) {
+          const optimized = await compressBase64Image(trimmed, 800, 800, 0.78);
+          setCustomPhotoUrl(optimized);
+          setUseCustomPhoto(true);
+          return;
+        } else if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
           setCustomPhotoUrl(trimmed);
           setUseCustomPhoto(true);
           return;

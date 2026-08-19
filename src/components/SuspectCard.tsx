@@ -73,6 +73,8 @@ export default function SuspectCard({
           <img
             src={primaryPhoto}
             alt={suspect.name}
+            loading="lazy"
+            decoding="async"
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
@@ -105,6 +107,8 @@ export default function SuspectCard({
             <img
               src={primaryPhoto}
               alt={suspect.name}
+              loading="lazy"
+              decoding="async"
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
             />
@@ -187,6 +191,8 @@ export default function SuspectCard({
               <img
                 src={primaryPhoto}
                 alt={suspect.name}
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
               />
