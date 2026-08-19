@@ -272,7 +272,26 @@ export function subscribeToAllUsers(onUpdate: (users: UserProfile[]) => void) {
       onUpdate(users);
     },
     (error) => {
-      console.error("Erro ao escutar todos os usuários:", error);
+      console.warn("Retrying user subscription with fallback:", error);
+      return onSnapshot(
+        usersRef,
+        (snap) => {
+          const users: UserProfile[] = [];
+          snap.forEach((doc) => {
+            users.push(doc.data() as UserProfile);
+          });
+          onUpdate(users);
+        },
+        (nestedErr) => {
+          console.warn("Fallback user subscription error:", nestedErr);
+          const usersStr = localStorage.getItem("sispir_local_users") || "[]";
+          try {
+            onUpdate(JSON.parse(usersStr));
+          } catch {
+            onUpdate([]);
+          }
+        }
+      );
     }
   );
 }
@@ -346,36 +365,6 @@ export async function deleteUserProfile(uid: string): Promise<void> {
 // --- Suspects Services ---
 
 export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
-  if (isLocalMode()) {
-    const fetchSuspects = async () => {
-      let suspects = await idbGet<Suspect[]>("sispir_local_suspects");
-      if (!suspects || suspects.length === 0) {
-        const suspectsStr = localStorage.getItem("sispir_local_suspects") || "[]";
-        try {
-          suspects = JSON.parse(suspectsStr) as Suspect[];
-        } catch {
-          suspects = [];
-        }
-      }
-      if (!suspects || suspects.length === 0) {
-        suspects = MOCK_SUSPECTS;
-        await idbSet("sispir_local_suspects", suspects);
-        safeSetLocalStorage("sispir_local_suspects", suspects);
-      }
-      // Preserve registration order (order of creation / insertion in database)
-      const sortedByRegistration = [...suspects].sort((a, b) => {
-        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        if (timeB !== timeA) return timeB - timeA;
-        return 0;
-      });
-      onUpdate(sortedByRegistration.length > 0 ? sortedByRegistration : suspects);
-    };
-    fetchSuspects();
-    
-    window.addEventListener("sispir_local_suspects_update", fetchSuspects);
-    return () => window.removeEventListener("sispir_local_suspects_update", fetchSuspects);
-  }
   const suspectsRef = collection(db, "suspects");
   const q = query(suspectsRef, orderBy("createdAt", "desc"));
   return onSnapshot(
@@ -385,66 +374,79 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
       snapshot.forEach((doc) => {
         suspects.push(doc.data() as Suspect);
       });
-      onUpdate(suspects);
+      // Fallback to local mocks if Firestore has 0 documents
+      if (suspects.length === 0) {
+        idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
+          if (local && local.length > 0) {
+            onUpdate(local);
+          } else {
+            onUpdate(MOCK_SUSPECTS);
+          }
+        });
+      } else {
+        idbSet("sispir_local_suspects", suspects);
+        onUpdate(suspects);
+      }
     },
     (error) => {
       console.warn("Retrying suspect subscription with fallback query:", error);
-      return onSnapshot(suspectsRef, (snap) => {
-        const suspects: Suspect[] = [];
-        snap.forEach((doc) => {
-          suspects.push(doc.data() as Suspect);
-        });
-        suspects.sort((a, b) => {
-          const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return timeB - timeA;
-        });
-        onUpdate(suspects);
-      });
+      return onSnapshot(
+        suspectsRef,
+        (snap) => {
+          const suspects: Suspect[] = [];
+          snap.forEach((doc) => {
+            suspects.push(doc.data() as Suspect);
+          });
+          suspects.sort((a, b) => {
+            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return timeB - timeA;
+          });
+          if (suspects.length > 0) {
+            idbSet("sispir_local_suspects", suspects);
+            onUpdate(suspects);
+          }
+        },
+        (nestedErr) => {
+          console.warn("Fallback suspects subscription error:", nestedErr);
+          idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
+            if (local && local.length > 0) {
+              onUpdate(local);
+            } else {
+              onUpdate(MOCK_SUSPECTS);
+            }
+          });
+        }
+      );
     }
   );
 }
 
 export async function addSuspect(suspect: Omit<Suspect, "createdAt" | "updatedAt">): Promise<void> {
-  if (isLocalMode()) {
-    let suspects = await idbGet<Suspect[]>("sispir_local_suspects");
-    if (!suspects || suspects.length === 0) {
-      const suspectsStr = localStorage.getItem("sispir_local_suspects") || "[]";
-      try {
-        suspects = JSON.parse(suspectsStr) as Suspect[];
-      } catch {
-        suspects = [];
-      }
-    }
-    const fullSuspect: Suspect = {
-      ...suspect,
-      createdAt: (suspect as any).createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    
-    const index = suspects.findIndex((s) => s.id === fullSuspect.id);
-    if (index !== -1) {
-      suspects[index] = fullSuspect;
-    } else {
-      suspects.push(fullSuspect);
-    }
+  const fullSuspect: Suspect = {
+    ...suspect,
+    createdAt: (suspect as any).createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 
-    await idbSet("sispir_local_suspects", suspects);
-    safeSetLocalStorage("sispir_local_suspects", suspects);
-    window.dispatchEvent(new Event("sispir_local_suspects_update"));
-    return;
-  }
   try {
     const suspectRef = doc(db, "suspects", suspect.id);
-    const fullSuspect: Suspect = {
-      ...suspect,
-      createdAt: (suspect as any).createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
     await setDoc(suspectRef, fullSuspect);
   } catch (error) {
-    console.error("Erro ao adicionar suspeito:", error);
-    throw error;
+    console.warn("Aviso ao gravar suspeito no Firestore:", error);
+  }
+
+  // Also maintain local mirror
+  try {
+    let local = (await idbGet<Suspect[]>("sispir_local_suspects")) || [];
+    const idx = local.findIndex((s) => s.id === fullSuspect.id);
+    if (idx !== -1) local[idx] = fullSuspect;
+    else local.unshift(fullSuspect);
+    await idbSet("sispir_local_suspects", local);
+    safeSetLocalStorage("sispir_local_suspects", local);
+    window.dispatchEvent(new Event("sispir_local_suspects_update"));
+  } catch (e) {
+    console.error("Erro no cache local do suspeito:", e);
   }
 }
 
@@ -452,64 +454,124 @@ export async function updateSuspect(
   suspectId: string,
   suspectData: Partial<Omit<Suspect, "id" | "createdAt" | "createdBy">>
 ): Promise<void> {
-  if (isLocalMode()) {
-    let suspects = await idbGet<Suspect[]>("sispir_local_suspects");
-    if (!suspects || suspects.length === 0) {
-      const suspectsStr = localStorage.getItem("sispir_local_suspects") || "[]";
-      try {
-        suspects = JSON.parse(suspectsStr) as Suspect[];
-      } catch {
-        suspects = [];
-      }
-    }
-    const index = suspects.findIndex((s) => s.id === suspectId);
-    if (index !== -1) {
-      suspects[index] = {
-        ...suspects[index],
-        ...suspectData,
-        updatedAt: new Date().toISOString(),
-      };
-      await idbSet("sispir_local_suspects", suspects);
-      safeSetLocalStorage("sispir_local_suspects", suspects);
-      window.dispatchEvent(new Event("sispir_local_suspects_update"));
-    }
-    return;
-  }
+  const updatePayload = {
+    ...suspectData,
+    updatedAt: new Date().toISOString(),
+  };
+
   try {
     const suspectRef = doc(db, "suspects", suspectId);
-    await updateDoc(suspectRef, {
-      ...suspectData,
-      updatedAt: new Date().toISOString(),
-    });
+    await updateDoc(suspectRef, updatePayload);
   } catch (error) {
-    console.error("Erro ao atualizar suspeito:", error);
-    throw error;
+    console.warn("Aviso ao atualizar suspeito no Firestore:", error);
+  }
+
+  try {
+    let local = (await idbGet<Suspect[]>("sispir_local_suspects")) || [];
+    const idx = local.findIndex((s) => s.id === suspectId);
+    if (idx !== -1) {
+      local[idx] = { ...local[idx], ...updatePayload };
+      await idbSet("sispir_local_suspects", local);
+      safeSetLocalStorage("sispir_local_suspects", local);
+      window.dispatchEvent(new Event("sispir_local_suspects_update"));
+    }
+  } catch (e) {
+    console.error("Erro ao atualizar cache local do suspeito:", e);
   }
 }
 
 export async function deleteSuspect(suspectId: string): Promise<void> {
-  if (isLocalMode()) {
-    let suspects = await idbGet<Suspect[]>("sispir_local_suspects");
-    if (!suspects || suspects.length === 0) {
-      const suspectsStr = localStorage.getItem("sispir_local_suspects") || "[]";
-      try {
-        suspects = JSON.parse(suspectsStr) as Suspect[];
-      } catch {
-        suspects = [];
-      }
-    }
-    const filtered = suspects.filter((s) => s.id !== suspectId);
-    await idbSet("sispir_local_suspects", filtered);
-    safeSetLocalStorage("sispir_local_suspects", filtered);
-    window.dispatchEvent(new Event("sispir_local_suspects_update"));
-    return;
-  }
   try {
     await deleteDoc(doc(db, "suspects", suspectId));
   } catch (error) {
-    console.error("Erro ao deletar suspeito:", error);
-    throw error;
+    console.warn("Aviso ao deletar suspeito no Firestore:", error);
   }
+
+  try {
+    let local = (await idbGet<Suspect[]>("sispir_local_suspects")) || [];
+    const filtered = local.filter((s) => s.id !== suspectId);
+    await idbSet("sispir_local_suspects", filtered);
+    safeSetLocalStorage("sispir_local_suspects", filtered);
+    window.dispatchEvent(new Event("sispir_local_suspects_update"));
+  } catch (e) {
+    console.error("Erro ao deletar cache local do suspeito:", e);
+  }
+}
+
+// Ultra-fast chunked Firestore Batch Importer for full database backups
+export async function importBackupBatchToFirestore(
+  suspects: Suspect[],
+  occurrences: Occurrence[],
+  onProgress?: (progressText: string, percentage: number) => void
+): Promise<{ totalSuspects: number; totalOccurrences: number }> {
+  const BATCH_SIZE = 350; // Under Firestore 500 limit
+  let importedSuspects = 0;
+  let importedOccurrences = 0;
+  const totalItems = suspects.length + occurrences.length;
+
+  // 1. Batch Write Suspects to Cloud Firestore
+  for (let i = 0; i < suspects.length; i += BATCH_SIZE) {
+    const chunk = suspects.slice(i, i + BATCH_SIZE);
+    try {
+      const batch = writeBatch(db);
+      for (const s of chunk) {
+        const fullSuspect: Suspect = {
+          ...s,
+          createdAt: s.createdAt || new Date().toISOString(),
+          updatedAt: s.updatedAt || new Date().toISOString(),
+        };
+        const ref = doc(db, "suspects", fullSuspect.id);
+        batch.set(ref, fullSuspect);
+      }
+      await batch.commit();
+      importedSuspects += chunk.length;
+      if (onProgress && totalItems > 0) {
+        const pct = Math.round((importedSuspects / totalItems) * 100);
+        onProgress(`Gravando suspeitos na nuvem Firestore (${importedSuspects}/${suspects.length})...`, pct);
+      }
+    } catch (batchErr) {
+      console.warn("Erro ao gravar lote de suspeitos no Firestore:", batchErr);
+    }
+  }
+
+  // 2. Batch Write Occurrences to Cloud Firestore
+  for (let i = 0; i < occurrences.length; i += BATCH_SIZE) {
+    const chunk = occurrences.slice(i, i + BATCH_SIZE);
+    try {
+      const batch = writeBatch(db);
+      for (const o of chunk) {
+        const fullOcc: Occurrence = {
+          ...o,
+          createdAt: o.createdAt || new Date().toISOString(),
+          updatedAt: o.updatedAt || new Date().toISOString(),
+        };
+        const ref = doc(db, "occurrences", fullOcc.id);
+        batch.set(ref, fullOcc);
+      }
+      await batch.commit();
+      importedOccurrences += chunk.length;
+      if (onProgress && totalItems > 0) {
+        const pct = Math.round(((importedSuspects + importedOccurrences) / totalItems) * 100);
+        onProgress(`Gravando ocorrências na nuvem Firestore (${importedOccurrences}/${occurrences.length})...`, pct);
+      }
+    } catch (batchErr) {
+      console.warn("Erro ao gravar lote de ocorrências no Firestore:", batchErr);
+    }
+  }
+
+  // Also update local cache for immediate feedback
+  if (suspects.length > 0) {
+    await idbSet("sispir_local_suspects", suspects);
+    safeSetLocalStorage("sispir_local_suspects", suspects);
+    window.dispatchEvent(new Event("sispir_local_suspects_update"));
+  }
+  if (occurrences.length > 0) {
+    await idbSet("sispir_local_occurrences", occurrences);
+    safeSetLocalStorage("sispir_local_occurrences", occurrences);
+    window.dispatchEvent(new Event("sispir_local_occurrences_update"));
+  }
+
+  return { totalSuspects: importedSuspects, totalOccurrences: importedOccurrences };
 }
 
 // Seeding helper to seed suspects if empty
@@ -556,29 +618,6 @@ export async function populateInitialMocks(): Promise<void> {
 // --- Occurrences Services ---
 
 export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => void) {
-  if (isLocalMode()) {
-    const fetchOccurrences = async () => {
-      let occurrences = await idbGet<Occurrence[]>("sispir_local_occurrences");
-      if (!occurrences || occurrences.length === 0) {
-        const occurrencesStr = localStorage.getItem("sispir_local_occurrences") || "[]";
-        try {
-          occurrences = JSON.parse(occurrencesStr) as Occurrence[];
-        } catch {
-          occurrences = [];
-        }
-      }
-      if (!occurrences || occurrences.length === 0) {
-        occurrences = MOCK_OCCURRENCES;
-        await idbSet("sispir_local_occurrences", occurrences);
-        safeSetLocalStorage("sispir_local_occurrences", occurrences);
-      }
-      onUpdate(occurrences.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-    };
-    fetchOccurrences();
-    
-    window.addEventListener("sispir_local_occurrences_update", fetchOccurrences);
-    return () => window.removeEventListener("sispir_local_occurrences_update", fetchOccurrences);
-  }
   const occurrencesRef = collection(db, "occurrences");
   const q = query(occurrencesRef, orderBy("createdAt", "desc"));
   return onSnapshot(
@@ -588,54 +627,72 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
       snapshot.forEach((doc) => {
         occurrences.push(doc.data() as Occurrence);
       });
-      onUpdate(occurrences);
+      if (occurrences.length === 0) {
+        idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
+          if (local && local.length > 0) {
+            onUpdate(local);
+          } else {
+            onUpdate(MOCK_OCCURRENCES);
+          }
+        });
+      } else {
+        idbSet("sispir_local_occurrences", occurrences);
+        onUpdate(occurrences);
+      }
     },
     (error) => {
-      console.error("Erro ao escutar ocorrências:", error);
+      console.warn("Retrying occurrences subscription with fallback query:", error);
+      return onSnapshot(
+        occurrencesRef,
+        (snap) => {
+          const occurrences: Occurrence[] = [];
+          snap.forEach((doc) => {
+            occurrences.push(doc.data() as Occurrence);
+          });
+          if (occurrences.length > 0) {
+            idbSet("sispir_local_occurrences", occurrences);
+            onUpdate(occurrences);
+          }
+        },
+        (nestedErr) => {
+          console.warn("Fallback occurrences subscription error:", nestedErr);
+          idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
+            if (local && local.length > 0) {
+              onUpdate(local);
+            } else {
+              onUpdate(MOCK_OCCURRENCES);
+            }
+          });
+        }
+      );
     }
   );
 }
 
 export async function addOccurrence(occurrence: Omit<Occurrence, "createdAt" | "updatedAt">): Promise<void> {
-  if (isLocalMode()) {
-    let occurrences = await idbGet<Occurrence[]>("sispir_local_occurrences");
-    if (!occurrences || occurrences.length === 0) {
-      const occurrencesStr = localStorage.getItem("sispir_local_occurrences") || "[]";
-      try {
-        occurrences = JSON.parse(occurrencesStr) as Occurrence[];
-      } catch {
-        occurrences = [];
-      }
-    }
-    const fullOccurrence: Occurrence = {
-      ...occurrence,
-      createdAt: (occurrence as any).createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const fullOccurrence: Occurrence = {
+    ...occurrence,
+    createdAt: (occurrence as any).createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 
-    const index = occurrences.findIndex((o) => o.id === fullOccurrence.id);
-    if (index !== -1) {
-      occurrences[index] = fullOccurrence;
-    } else {
-      occurrences.push(fullOccurrence);
-    }
-
-    await idbSet("sispir_local_occurrences", occurrences);
-    safeSetLocalStorage("sispir_local_occurrences", occurrences);
-    window.dispatchEvent(new Event("sispir_local_occurrences_update"));
-    return;
-  }
   try {
     const occurrenceRef = doc(db, "occurrences", occurrence.id);
-    const fullOccurrence: Occurrence = {
-      ...occurrence,
-      createdAt: (occurrence as any).createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
     await setDoc(occurrenceRef, fullOccurrence);
   } catch (error) {
-    console.error("Erro ao adicionar ocorrência:", error);
-    throw error;
+    console.warn("Aviso ao adicionar ocorrência no Firestore:", error);
+  }
+
+  try {
+    let local = (await idbGet<Occurrence[]>("sispir_local_occurrences")) || [];
+    const idx = local.findIndex((o) => o.id === fullOccurrence.id);
+    if (idx !== -1) local[idx] = fullOccurrence;
+    else local.unshift(fullOccurrence);
+    await idbSet("sispir_local_occurrences", local);
+    safeSetLocalStorage("sispir_local_occurrences", local);
+    window.dispatchEvent(new Event("sispir_local_occurrences_update"));
+  } catch (e) {
+    console.error("Erro ao atualizar cache local da ocorrência:", e);
   }
 }
 
@@ -643,63 +700,47 @@ export async function updateOccurrence(
   occurrenceId: string,
   occurrenceData: Partial<Omit<Occurrence, "id" | "createdAt">>
 ): Promise<void> {
-  if (isLocalMode()) {
-    let occurrences = await idbGet<Occurrence[]>("sispir_local_occurrences");
-    if (!occurrences || occurrences.length === 0) {
-      const occurrencesStr = localStorage.getItem("sispir_local_occurrences") || "[]";
-      try {
-        occurrences = JSON.parse(occurrencesStr) as Occurrence[];
-      } catch {
-        occurrences = [];
-      }
-    }
-    const index = occurrences.findIndex((o) => o.id === occurrenceId);
-    if (index !== -1) {
-      occurrences[index] = {
-        ...occurrences[index],
-        ...occurrenceData,
-        updatedAt: new Date().toISOString(),
-      };
-      await idbSet("sispir_local_occurrences", occurrences);
-      safeSetLocalStorage("sispir_local_occurrences", occurrences);
-      window.dispatchEvent(new Event("sispir_local_occurrences_update"));
-    }
-    return;
-  }
+  const updatePayload = {
+    ...occurrenceData,
+    updatedAt: new Date().toISOString(),
+  };
+
   try {
     const occurrenceRef = doc(db, "occurrences", occurrenceId);
-    await updateDoc(occurrenceRef, {
-      ...occurrenceData,
-      updatedAt: new Date().toISOString(),
-    });
+    await updateDoc(occurrenceRef, updatePayload);
   } catch (error) {
-    console.error("Erro ao atualizar ocorrência:", error);
-    throw error;
+    console.warn("Aviso ao atualizar ocorrência no Firestore:", error);
+  }
+
+  try {
+    let local = (await idbGet<Occurrence[]>("sispir_local_occurrences")) || [];
+    const idx = local.findIndex((o) => o.id === occurrenceId);
+    if (idx !== -1) {
+      local[idx] = { ...local[idx], ...updatePayload };
+      await idbSet("sispir_local_occurrences", local);
+      safeSetLocalStorage("sispir_local_occurrences", local);
+      window.dispatchEvent(new Event("sispir_local_occurrences_update"));
+    }
+  } catch (e) {
+    console.error("Erro ao atualizar cache local da ocorrência:", e);
   }
 }
 
 export async function deleteOccurrence(occurrenceId: string): Promise<void> {
-  if (isLocalMode()) {
-    let occurrences = await idbGet<Occurrence[]>("sispir_local_occurrences");
-    if (!occurrences || occurrences.length === 0) {
-      const occurrencesStr = localStorage.getItem("sispir_local_occurrences") || "[]";
-      try {
-        occurrences = JSON.parse(occurrencesStr) as Occurrence[];
-      } catch {
-        occurrences = [];
-      }
-    }
-    const filtered = occurrences.filter((o) => o.id !== occurrenceId);
-    await idbSet("sispir_local_occurrences", filtered);
-    safeSetLocalStorage("sispir_local_occurrences", filtered);
-    window.dispatchEvent(new Event("sispir_local_occurrences_update"));
-    return;
-  }
   try {
     await deleteDoc(doc(db, "occurrences", occurrenceId));
   } catch (error) {
-    console.error("Erro ao deletar ocorrência:", error);
-    throw error;
+    console.warn("Aviso ao deletar ocorrência no Firestore:", error);
+  }
+
+  try {
+    let local = (await idbGet<Occurrence[]>("sispir_local_occurrences")) || [];
+    const filtered = local.filter((o) => o.id !== occurrenceId);
+    await idbSet("sispir_local_occurrences", filtered);
+    safeSetLocalStorage("sispir_local_occurrences", filtered);
+    window.dispatchEvent(new Event("sispir_local_occurrences_update"));
+  } catch (e) {
+    console.error("Erro ao deletar cache local da ocorrência:", e);
   }
 }
 

@@ -13,6 +13,7 @@ import {
   addOccurrence,
   subscribeToAllUsers,
   updateUserStatus,
+  importBackupBatchToFirestore,
 } from "../dbService";
 import SuspectCard from "./SuspectCard";
 import SuspectModal from "./SuspectModal";
@@ -426,11 +427,10 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
         const content = event.target?.result as string;
         if (!content) return;
 
+        showToast("Lendo arquivo de backup...", "info");
         const data = JSON.parse(content);
-        let restoredSuspects = 0;
-        let restoredOccurrences = 0;
 
-        const suspectsList = Array.isArray(data)
+        const rawSuspectsList = Array.isArray(data)
           ? data
           : Array.isArray(data.suspects)
           ? data.suspects
@@ -444,30 +444,39 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
           ? [data]
           : [];
 
-        for (const rawSuspect of suspectsList) {
-          const suspect = normalizeSuspectFromJSON(rawSuspect);
-          if (suspect) {
-            await addSuspect(suspect);
-            restoredSuspects++;
-          }
+        const normalizedSuspects: Suspect[] = [];
+        for (const rawSuspect of rawSuspectsList) {
+          const s = normalizeSuspectFromJSON(rawSuspect);
+          if (s) normalizedSuspects.push(s);
         }
 
-        const occurrencesList = Array.isArray(data.occurrences)
+        const rawOccList = Array.isArray(data.occurrences)
           ? data.occurrences
           : Array.isArray(data.ocorrencias)
           ? data.ocorrencias
           : [];
 
-        for (const rawOcc of occurrencesList) {
+        const normalizedOccs: Occurrence[] = [];
+        for (const rawOcc of rawOccList) {
           const occ = normalizeOccurrenceFromJSON(rawOcc);
-          if (occ) {
-            await addOccurrence(occ);
-            restoredOccurrences++;
-          }
+          if (occ) normalizedOccs.push(occ);
         }
 
         showToast(
-          `Backup/JSON importado com sucesso! (${restoredSuspects} suspeitos, ${restoredOccurrences} ocorrências)`,
+          `Gravando ${normalizedSuspects.length} suspeitos e ${normalizedOccs.length} ocorrências no Firestore...`,
+          "info"
+        );
+
+        const result = await importBackupBatchToFirestore(
+          normalizedSuspects,
+          normalizedOccs,
+          (msg) => {
+            showToast(msg, "info");
+          }
+        );
+
+        showToast(
+          `Backup gravado com sucesso no Firebase na Nuvem! (${result.totalSuspects} suspeitos, ${result.totalOccurrences} ocorrências)`,
           "success"
         );
       } catch (err) {

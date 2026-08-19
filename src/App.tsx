@@ -14,25 +14,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if we are in local mode at start
-    if (localStorage.getItem("sispir_mode") === "local") {
-      const localUid = localStorage.getItem("sispir_local_user_id") || "local-admin";
-      const localProfileStr = localStorage.getItem(`sispir_local_profile_${localUid}`);
-      if (localProfileStr) {
-        const localProfile = JSON.parse(localProfileStr);
-        setUser({ uid: localUid, email: localProfile.email });
-        setProfile(localProfile);
-        setLoading(false);
-        return;
-      }
-    }
-
     // 1. Listen to Firebase Auth state
     const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
-      if (localStorage.getItem("sispir_mode") === "local") return;
-      setUser(firebaseUser);
-      
-      if (!firebaseUser) {
+      if (firebaseUser) {
+        setUser(firebaseUser);
+      } else {
+        // If local admin session exists as contingency
+        if (localStorage.getItem("sispir_mode") === "local") {
+          const localUid = localStorage.getItem("sispir_local_user_id") || "local-admin";
+          const localProfileStr = localStorage.getItem(`sispir_local_profile_${localUid}`);
+          if (localProfileStr) {
+            const localProfile = JSON.parse(localProfileStr);
+            setUser({ uid: localUid, email: localProfile.email });
+            setProfile(localProfile);
+            setLoading(false);
+            return;
+          }
+        }
+        setUser(null);
         setProfile(null);
         setLoading(false);
       }
@@ -43,7 +42,6 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    if (localStorage.getItem("sispir_mode") === "local") return;
 
     // 2. Listen to User profile document in Firestore
     setLoading(true);
@@ -61,8 +59,13 @@ export default function App() {
             console.error("Error auto-approving owner profile:", err);
           }
         }
+        setProfile(userProfile);
+      } else if (localStorage.getItem("sispir_mode") === "local") {
+        const localProfileStr = localStorage.getItem(`sispir_local_profile_${user.uid}`);
+        if (localProfileStr) {
+          setProfile(JSON.parse(localProfileStr));
+        }
       }
-      setProfile(userProfile);
       setLoading(false);
     });
 

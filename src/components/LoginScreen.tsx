@@ -70,7 +70,48 @@ export default function LoginScreen({ onAuthSuccess }: LoginScreenProps) {
         throw new Error("Senha administrativa incorreta.");
       }
 
-      // Master admin authorized
+      // Master admin authorized - connect directly to Cloud Firestore
+      const adminEmail = "admin@segint.gov.br";
+      const adminPass = "admin234589";
+
+      try {
+        let userCred;
+        try {
+          userCred = await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+        } catch (signInErr: any) {
+          if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
+            try {
+              userCred = await createUserWithEmailAndPassword(auth, adminEmail, adminPass);
+            } catch {
+              // If creation fails, fallback to anonymous or session
+            }
+          }
+        }
+
+        if (userCred && userCred.user) {
+          const uid = userCred.user.uid;
+          const { setDoc, doc } = await import("firebase/firestore");
+          const { db } = await import("../firebase");
+          const adminProfile = {
+            uid,
+            name: "ADMINISTRADOR (ALI)",
+            email: adminEmail,
+            role: "admin" as const,
+            status: "approved" as const,
+            badgeId: "ADM-22BPM",
+            lotacao: "22º BPM - ALI",
+            createdAt: new Date().toISOString(),
+          };
+          await setDoc(doc(db, "users", uid), adminProfile, { merge: true });
+          localStorage.removeItem("sispir_mode");
+          onAuthSuccess(uid);
+          return;
+        }
+      } catch (cloudErr) {
+        console.warn("Cloud auth notice for master admin:", cloudErr);
+      }
+
+      // Fallback local session if cloud auth failed
       localStorage.setItem("sispir_mode", "local");
       const uid = "admin-master";
       localStorage.setItem("sispir_local_user_id", uid);
