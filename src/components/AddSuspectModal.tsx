@@ -52,7 +52,7 @@ export default function AddSuspectModal({
   const [name, setName] = useState("");
   const [alias, setAlias] = useState("");
   const [document, setDocument] = useState("");
-  const [status, setStatus] = useState<SuspectStatus>("wanted");
+  const [status, setStatus] = useState<SuspectStatus>("investigating");
   const [birthDate, setBirthDate] = useState("");
   const [motherName, setMotherName] = useState("");
   const [faction, setFaction] = useState("");
@@ -566,10 +566,10 @@ export default function AddSuspectModal({
           name: name.trim().toUpperCase(),
           alias: alias.trim().toUpperCase(),
           document: document.trim(),
-          status: foragido ? "wanted" : status, // foragido toggle overrides status to wanted
+          status: foragido ? "wanted" : (status === "wanted" ? "investigating" : status),
           birthDate,
           motherName: motherName.trim(),
-          faction: faction.trim().toUpperCase() || "INDEPENDENTE",
+          faction: faction.trim().toUpperCase(),
           areaOfOperation: areaOfOperation.trim().toUpperCase(),
           height,
           weight,
@@ -597,10 +597,10 @@ export default function AddSuspectModal({
           name: name.trim().toUpperCase(),
           alias: alias.trim().toUpperCase(),
           document: document.trim(),
-          status: foragido ? "wanted" : status,
+          status: foragido ? "wanted" : (status === "wanted" ? "investigating" : status),
           birthDate,
           motherName: motherName.trim(),
-          faction: faction.trim().toUpperCase() || "INDEPENDENTE",
+          faction: faction.trim().toUpperCase(),
           areaOfOperation: areaOfOperation.trim().toUpperCase(),
           height,
           weight,

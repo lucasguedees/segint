@@ -380,13 +380,24 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     }
 
     // Status & flags
-    let status: SuspectStatus = (s.status as SuspectStatus) || "wanted";
-    if (s.foragido) {
-      status = "wanted";
+    let status: SuspectStatus = "investigating";
+    if (s.status === "wanted" || s.status === "arrested" || s.status === "investigating" || s.status === "inactive") {
+      status = s.status;
     }
 
-    const alvoEmFoco = Boolean(s.alvoEmFoco || s.alvo_em_foco || s.alvo);
-    const foragido = Boolean(s.foragido || s.isForagido || status === "wanted");
+    const isExplicitlyForagido = Boolean(
+      s.foragido === true ||
+      s.foragido === "true" ||
+      s.foragido === "sim" ||
+      s.isForagido === true ||
+      (s.status === "wanted" && s.foragido !== false && s.foragido !== "false")
+    );
+
+    const alvoEmFoco = Boolean(s.alvoEmFoco === true || s.alvoEmFoco === "true" || s.alvo_em_foco === true);
+    const foragido = isExplicitlyForagido;
+    if (foragido) {
+      status = "wanted";
+    }
 
     let createdAt = s.createdAt || s.dataCadastro || new Date().toISOString();
     if (typeof s.dataCadastro === "string" && s.dataCadastro.trim()) {
@@ -396,6 +407,9 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     const rawId = (s.id || s._id || s.codigo || "").toString().trim();
     const finalId = rawId ? `SUSP-${rawId}` : `SUSP-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
+    // Faction / OrCrim: only set if explicitly present, do NOT default to Independente
+    const rawFaction = (s.faction || s.faccao || s.grupo || s.orcrim || "").toString().trim();
+
     return {
       id: finalId,
       name,
@@ -404,7 +418,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
       status,
       birthDate: (s.birthDate || s.dataNascimento || "").toString(),
       motherName: (s.motherName || s.nomeMae || "").toString(),
-      faction: (s.faction || s.faccao || s.grupo || "Independente").toString(),
+      faction: rawFaction,
       areaOfOperation: city,
       municipio: city,
       lastKnownAddress: address,
@@ -860,6 +874,100 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
     );
   };
 
+  // Smart CSV parser helper
+  const parseCSVToSuspects = (csvText: string): Suspect[] => {
+    const rawLines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (rawLines.length === 0) return [];
+
+    // Determine delimiter (comma, semicolon, or tab)
+    const firstLine = rawLines[0];
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semiCount = (firstLine.match(/;/g) || []).length;
+    const tabCount = (firstLine.match(/\t/g) || []).length;
+    const delimiter = semiCount > commaCount && semiCount > tabCount ? ";" : tabCount > commaCount ? "\t" : ",";
+
+    // Split line respecting quotes
+    const parseLine = (line: string): string[] => {
+      const result: string[] = [];
+      let cur = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"' || char === "'") {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          result.push(cur.trim().replace(/^["']|["']$/g, ""));
+          cur = "";
+        } else {
+          cur += char;
+        }
+      }
+      result.push(cur.trim().replace(/^["']|["']$/g, ""));
+      return result;
+    };
+
+    const headers = parseLine(rawLines[0]).map((h) =>
+      h.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "")
+    );
+
+    const getCol = (cols: string[], possibleHeaders: string[], fallbackIdx: number): string => {
+      for (const ph of possibleHeaders) {
+        const idx = headers.indexOf(ph);
+        if (idx !== -1 && cols[idx] !== undefined) return cols[idx].trim();
+      }
+      return cols[fallbackIdx] !== undefined ? cols[fallbackIdx].trim() : "";
+    };
+
+    const suspectsList: Suspect[] = [];
+    const startIndex = headers.some((h) => ["nome", "name", "suspeito", "individuo", "alvo"].includes(h)) ? 1 : 0;
+
+    for (let i = startIndex; i < rawLines.length; i++) {
+      const cols = parseLine(rawLines[i]);
+      if (cols.length === 0 || !cols.some((c) => c.length > 0)) continue;
+
+      const name = getCol(cols, ["nome", "name", "nomecompleto", "suspeito", "individuo", "alvo"], 0);
+      const alias = getCol(cols, ["vulgo", "alcunha", "alias", "apelido"], 1);
+      const document = getCol(cols, ["rg", "cpf", "rgcpf", "documento", "document", "doc"], 2);
+      const city = getCol(cols, ["cidade", "municipio", "area", "areaatuacao", "areaofoperation", "bairro"], 3) || "LAJEADO";
+      const faction = getCol(cols, ["faccao", "faction", "grupo", "organizacao", "orcrim"], 4);
+      const motherName = getCol(cols, ["nomemae", "mae", "mothername", "genitora"], 5);
+      const birthDate = getCol(cols, ["datanascimento", "nascimento", "birthdate", "dtnasc"], 6);
+      const address = getCol(cols, ["endereco", "rua", "logradouro", "lastknownaddress"], 7);
+      const obs = getCol(cols, ["observacoes", "obs", "historico", "antecedentes", "detalhes"], 8);
+      const photo = getCol(cols, ["foto", "fotourl", "imagem", "photourl", "photos"], 9);
+      const foragidoCol = getCol(cols, ["foragido", "mandado", "isforagido"], 10);
+      const isForagido = foragidoCol.toLowerCase() === "sim" || foragidoCol.toLowerCase() === "true" || foragidoCol.toLowerCase() === "1";
+
+      if (!name && !alias && !document) continue;
+
+      const finalName = name || (alias ? `INDIVÍDUO (${alias.toUpperCase()})` : `INDIVÍDUO DOC ${document}`);
+      const suspectId = `SUSP-CSV-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+      suspectsList.push({
+        id: suspectId,
+        name: finalName,
+        alias,
+        document,
+        areaOfOperation: city,
+        municipio: city,
+        lastKnownAddress: address,
+        faction: faction.trim(),
+        status: isForagido ? "wanted" : "investigating",
+        foragido: isForagido,
+        birthDate,
+        motherName,
+        observations: obs,
+        antecedentes: obs,
+        photos: photo ? [photo] : [],
+        createdBy: currentUser.uid,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    return suspectsList;
+  };
+
   // Import File Handler (JSON or CSV)
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -871,58 +979,110 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
         const text = event.target?.result as string;
         if (!text) return;
 
-        let importedCount = 0;
-        if (file.name.endsWith(".json")) {
-          const parsed = JSON.parse(text);
-          const list = Array.isArray(parsed)
-            ? parsed
-            : Array.isArray(parsed.suspects)
-            ? parsed.suspects
-            : Array.isArray(parsed.suspeitos)
-            ? parsed.suspeitos
-            : Array.isArray(parsed.data)
-            ? parsed.data
-            : Array.isArray(parsed.items)
-            ? parsed.items
-            : typeof parsed === "object" && (parsed.nome || parsed.name)
-            ? [parsed]
-            : [];
+        showToast("Lendo arquivo...", "info");
 
-          for (const rawItem of list) {
-            const suspect = normalizeSuspectFromJSON(rawItem);
-            if (suspect) {
-              await addSuspect(suspect);
-              importedCount++;
+        let normalizedSuspects: Suspect[] = [];
+        let normalizedOccs: Occurrence[] = [];
+
+        if (file.name.toLowerCase().endsWith(".csv") || (!file.name.toLowerCase().endsWith(".json") && text.includes("\n") && (text.includes(";") || text.includes(",")))) {
+          normalizedSuspects = parseCSVToSuspects(text);
+        } else {
+          // JSON parsing
+          const data = JSON.parse(text);
+          let rawSuspectsList: any[] = [];
+          let rawOccList: any[] = [];
+
+          if (Array.isArray(data)) {
+            rawSuspectsList = data;
+          } else if (typeof data === "object" && data !== null) {
+            if (Array.isArray(data.suspects)) rawSuspectsList = data.suspects;
+            else if (Array.isArray(data.suspeitos)) rawSuspectsList = data.suspeitos;
+            else if (Array.isArray(data.data)) rawSuspectsList = data.data;
+            else if (Array.isArray(data.items)) rawSuspectsList = data.items;
+            else if (Array.isArray(data.records)) rawSuspectsList = data.records;
+            else if (Array.isArray(data.rows)) rawSuspectsList = data.rows;
+            else if (Array.isArray(data.pessoas)) rawSuspectsList = data.pessoas;
+            else if (Array.isArray(data.individuos)) rawSuspectsList = data.individuos;
+            else if (Array.isArray(data.cadastros)) rawSuspectsList = data.cadastros;
+            else if (Array.isArray(data.alvos)) rawSuspectsList = data.alvos;
+            else {
+              const values = Object.values(data);
+              const suspectLike = values.filter(
+                (v: any) =>
+                  v &&
+                  typeof v === "object" &&
+                  (v.nome || v.name || v.alcunha || v.alias || v.vulgo || v.cpf || v.rg || v.documento || v.suspeito)
+              );
+              if (suspectLike.length > 0) {
+                rawSuspectsList = suspectLike;
+              } else if (data.nome || data.name || data.suspeito) {
+                rawSuspectsList = [data];
+              }
+            }
+
+            if (Array.isArray(data.occurrences)) rawOccList = data.occurrences;
+            else if (Array.isArray(data.ocorrencias)) rawOccList = data.ocorrencias;
+            else if (Array.isArray(data.events)) rawOccList = data.events;
+          }
+
+          const seenIds = new Set<string>();
+          for (let i = 0; i < rawSuspectsList.length; i++) {
+            const s = normalizeSuspectFromJSON(rawSuspectsList[i], i);
+            if (s) {
+              let uniqueId = s.id;
+              let counter = 1;
+              while (seenIds.has(uniqueId)) {
+                uniqueId = `${s.id}_${counter++}`;
+              }
+              seenIds.add(uniqueId);
+              normalizedSuspects.push({ ...s, id: uniqueId });
             }
           }
-        } else {
-          // Simple CSV line parser
-          const lines = text.split("\n").filter((l) => l.trim().length > 0);
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(",").map((c) => c.replace(/^"|"$/g, "").trim());
-            if (cols.length >= 2 && cols[1]) {
-              await addSuspect({
-                name: cols[1] || cols[0],
-                alias: cols[2] || "",
-                document: cols[3] || "",
-                areaOfOperation: cols[4] || "LAJEADO",
-                municipio: cols[4] || "LAJEADO",
-                faction: cols[5] || "Independente",
-                status: "wanted",
-                birthDate: "",
-                motherName: "",
-                observations: cols[7] || "",
-                antecedentes: cols[7] || "",
-                photos: [],
-                createdBy: currentUser.uid,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              } as any);
-              importedCount++;
+
+          const seenOccIds = new Set<string>();
+          for (let i = 0; i < rawOccList.length; i++) {
+            const occ = normalizeOccurrenceFromJSON(rawOccList[i], i);
+            if (occ) {
+              let uniqueId = occ.id;
+              let counter = 1;
+              while (seenOccIds.has(uniqueId)) {
+                uniqueId = `${occ.id}_${counter++}`;
+              }
+              seenOccIds.add(uniqueId);
+              normalizedOccs.push({ ...occ, id: uniqueId });
             }
           }
         }
-        showToast(`${importedCount} registros de suspeitos importados com sucesso.`, "success");
+
+        if (normalizedSuspects.length === 0 && normalizedOccs.length === 0) {
+          showToast("Nenhum registro reconhecido no arquivo enviado.", "error");
+          return;
+        }
+
+        if (normalizedSuspects.length > 0) {
+          setSuspects(normalizedSuspects);
+        }
+        if (normalizedOccs.length > 0) {
+          setOccurrences(normalizedOccs);
+        }
+
+        showToast(
+          `Gravando ${normalizedSuspects.length} suspeitos e ${normalizedOccs.length} ocorrências no Cloud Firestore...`,
+          "info"
+        );
+
+        const result = await importBackupBatchToFirestore(
+          normalizedSuspects,
+          normalizedOccs,
+          (msg) => {
+            showToast(msg, "info");
+          }
+        );
+
+        showToast(
+          `Importação concluída com sucesso no Firebase na Nuvem! (${result.totalSuspects} suspeitos, ${result.totalOccurrences} ocorrências)`,
+          "success"
+        );
       } catch (err) {
         console.error(err);
         showToast("Erro ao importar o arquivo. Verifique se o formato está correto.", "error");

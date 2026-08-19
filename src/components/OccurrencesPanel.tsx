@@ -8,7 +8,8 @@ import {
   addOccurrence,
   updateOccurrence,
   deleteOccurrence,
-  seedOccurrencesIfEmpty
+  seedOccurrencesIfEmpty,
+  importBackupBatchToFirestore
 } from "../dbService";
 import {
   Search,
@@ -187,17 +188,18 @@ export default function OccurrencesPanel({ currentUser, suspects, onViewSuspect,
 
     const payload = {
       id: editingOccurrence ? editingOccurrence.id : `OCOR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-      title,
-      description,
-      location,
+      title: title.trim().toUpperCase(),
+      description: description.trim(),
+      location: location.trim(),
       date,
       time,
       severity,
       status,
       relatedSuspects: selectedSuspects,
-      envolvidoName: envolvidoName.trim() || undefined,
-      vulgo: vulgo.trim() || undefined,
-      photoUrl: customPhotoUrl.trim() || undefined,
+      envolvidoName: envolvidoName.trim() || "",
+      vulgo: vulgo.trim() || "",
+      photoUrl: customPhotoUrl.trim() || "",
+      photos: customPhotoUrl.trim() ? [customPhotoUrl.trim()] : [],
       agentInCharge: editingOccurrence ? editingOccurrence.agentInCharge : currentUser.name,
     };
 
@@ -208,12 +210,12 @@ export default function OccurrencesPanel({ currentUser, suspects, onViewSuspect,
           setSelectedOccurrence({ ...selectedOccurrence, ...payload, updatedAt: new Date().toISOString() });
         }
         if (showToast) {
-          showToast("Ocorrência atualizada com sucesso.", "success");
+          showToast("Ocorrência atualizada com sucesso no banco de dados.", "success");
         }
       } else {
         await addOccurrence(payload);
         if (showToast) {
-          showToast("Ocorrência registrada com sucesso.", "success");
+          showToast("Ocorrência registrada e sincronizada com sucesso.", "success");
         }
       }
       setIsFormOpen(false);
@@ -221,11 +223,11 @@ export default function OccurrencesPanel({ currentUser, suspects, onViewSuspect,
     } catch (err) {
       console.error(err);
       if (showToast) {
-        showToast("Erro ao salvar ocorrência.", "error");
+        showToast("Erro ao salvar ocorrência no banco de dados.", "error");
       } else {
         setPanelAlert({
           title: "ERRO DE GRAVAÇÃO",
-          message: "Erro ao salvar ocorrência no banco de dados. Verifique sua conexão ou permissões.",
+          message: "Erro ao salvar ocorrência no banco de dados. Verifique sua conexão.",
           type: "error"
         });
       }
@@ -356,55 +358,92 @@ export default function OccurrencesPanel({ currentUser, suspects, onViewSuspect,
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        let importedCount = 0;
+        if (!text) return;
+
+        let occsToImport: Occurrence[] = [];
+        let suspectsToImport: Suspect[] = [];
 
         if (file.name.endsWith(".json")) {
           const parsed = JSON.parse(text);
-          const items = Array.isArray(parsed) ? parsed : [parsed];
-          for (const item of items) {
-            if (item.title && item.location) {
-              await addOccurrence({
-                id: item.id || `OCOR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-                title: item.title,
-                description: item.description || "Importado via arquivo",
-                location: item.location,
-                date: item.date || new Date().toISOString().split("T")[0],
-                time: item.time || "12:00",
+          let rawList: any[] = [];
+          if (Array.isArray(parsed)) {
+            rawList = parsed;
+          } else if (typeof parsed === "object" && parsed !== null) {
+            if (Array.isArray(parsed.occurrences)) {
+              rawList = parsed.occurrences;
+            }
+            if (Array.isArray(parsed.suspects)) {
+              suspectsToImport = parsed.suspects;
+            }
+            if (rawList.length === 0 && !Array.isArray(parsed.suspects)) {
+              rawList = [parsed];
+            }
+          }
+
+          for (let i = 0; i < rawList.length; i++) {
+            const item = rawList[i];
+            if (item && (item.title || item.location || item.envolvidoName || item.envolvido)) {
+              occsToImport.push({
+                id: item.id || `OCOR-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+                title: (item.title || item.natureza || "OCORRÊNCIA").toString().toUpperCase(),
+                description: item.description || item.historico || item.relatorio || "Importado via backup",
+                location: item.location || item.municipio || "LAJEADO/RS",
+                date: item.date || item.data || new Date().toISOString().split("T")[0],
+                time: item.time || item.hora || "12:00",
                 severity: item.severity || "medium",
                 status: item.status || "open",
-                envolvidoName: item.envolvidoName || item.envolvido,
-                vulgo: item.vulgo,
-                photoUrl: item.photoUrl,
-                agentInCharge: currentUser.name
+                envolvidoName: item.envolvidoName || item.envolvido || "",
+                vulgo: item.vulgo || "",
+                photoUrl: item.photoUrl || item.foto || "",
+                photos: Array.isArray(item.photos) ? item.photos : item.photoUrl ? [item.photoUrl] : [],
+                relatedSuspects: Array.isArray(item.relatedSuspects) ? item.relatedSuspects : [],
+                involvedPeople: Array.isArray(item.involvedPeople) ? item.involvedPeople : [],
+                agentInCharge: item.agentInCharge || currentUser.name,
+                createdAt: item.createdAt || new Date().toISOString(),
+                updatedAt: item.updatedAt || new Date().toISOString()
               });
-              importedCount++;
             }
           }
         } else {
-          // CSV Import fallback
+          // CSV Import
           const lines = text.split("\n").filter((l) => l.trim());
           for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(",").map((c) => c.replace(/^"|"$/g, "").trim());
-            if (cols.length >= 3) {
-              await addOccurrence({
-                id: cols[0] || `OCOR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-                title: cols[1] || "Ocorrência Importada",
+            const delimiter = lines[i].includes(";") ? ";" : ",";
+            const cols = lines[i].split(delimiter).map((c) => c.replace(/^"|"$/g, "").trim());
+            if (cols.length >= 2) {
+              occsToImport.push({
+                id: cols[0] || `OCOR-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+                title: (cols[1] || "OCORRÊNCIA IMPORTADA").toUpperCase(),
                 description: cols[9] || cols[2] || "Importado via CSV",
                 location: cols[4] || cols[3] || "LAJEADO/RS",
                 date: cols[5] || new Date().toISOString().split("T")[0],
                 time: cols[6] || "12:00",
                 severity: (cols[7] as any) || "medium",
                 status: (cols[8] as any) || "open",
-                envolvidoName: cols[2],
-                agentInCharge: currentUser.name
+                envolvidoName: cols[2] || "",
+                vulgo: cols[3] || "",
+                photoUrl: "",
+                photos: [],
+                relatedSuspects: [],
+                involvedPeople: [],
+                agentInCharge: currentUser.name,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
               });
-              importedCount++;
             }
           }
         }
 
+        if (occsToImport.length === 0 && suspectsToImport.length === 0) {
+          if (showToast) showToast("Nenhum registro válido encontrado no arquivo selecionado.", "info");
+          return;
+        }
+
+        if (showToast) showToast("Gravando ocorrências no banco de dados...", "info");
+        await importBackupBatchToFirestore(suspectsToImport, occsToImport);
+
         if (showToast) {
-          showToast(`${importedCount} registros de ocorrências importados com sucesso.`, "success");
+          showToast(`${occsToImport.length} ocorrências sincronizadas no banco com sucesso.`, "success");
         }
       } catch (err) {
         console.error(err);

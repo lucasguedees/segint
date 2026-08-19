@@ -491,23 +491,25 @@ export default function SuspectModal({
 
   const rawDoc = suspect.document
     ? suspect.document.replace(/\(RG\)|\(CPF\)/gi, "").trim()
-    : "04389920081";
+    : "NÃO INFORMADO";
 
   const city = suspect.municipio || suspect.areaOfOperation || "LAJEADO";
 
   const antecedentesText = [
     suspect.antecedentes,
     suspect.frequentCrimes ? `CRIMES FREQUENTES: ${suspect.frequentCrimes}` : null
-  ].filter(Boolean).join(" | ") || (suspect.frequentCrimes || "ENTORPECENTE POSSE, ENTORPECENTE TRÁFICO E PERTURBAÇÃO DO SOSSEGO ALHEIO");
+  ].filter(Boolean).join(" | ") || (suspect.frequentCrimes || "SEM REGISTRO DE ANTECEDENTES NO PRONTUÁRIO");
 
   const tattoosOrCharacteristics =
     suspect.tattoosScars || "Sem descrição de características físicas.";
 
   const mandadoText =
-    suspect.observations && suspect.observations.toLowerCase().includes("mandado")
+    suspect.mandadoNumero
+      ? `Nº MANDADO DE PRISÃO: ${suspect.mandadoNumero}`
+      : suspect.observations && suspect.observations.toLowerCase().includes("mandado")
       ? suspect.observations
       : suspect.foragido
-      ? "Nº mandado de prisão: 8000276-42-2024.8.21.0017.01.0001-03"
+      ? "FORAGIDO DA JUSTIÇA (MANDADO EM ABERTO)"
       : "Nenhum mandado ativo registrado.";
 
   return (

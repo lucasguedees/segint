@@ -402,17 +402,19 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
 }
 
 export async function addSuspect(suspect: Omit<Suspect, "createdAt" | "updatedAt">): Promise<void> {
-  const fullSuspect: Suspect = {
+  const suspectId = suspect.id || `SUSP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  const fullSuspect: Suspect = cleanDocForFirestore({
     ...suspect,
+    id: suspectId,
     createdAt: (suspect as any).createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   try {
-    const suspectRef = doc(db, "suspects", suspect.id);
-    await setDoc(suspectRef, fullSuspect);
+    const suspectRef = doc(db, "suspects", fullSuspect.id);
+    await setDoc(suspectRef, fullSuspect, { merge: true });
   } catch (error) {
-    console.warn("Aviso ao gravar suspeito no Firestore:", error);
+    console.error("Erro ao gravar suspeito no Firestore:", error);
   }
 
   // Also maintain local mirror
@@ -433,16 +435,16 @@ export async function updateSuspect(
   suspectId: string,
   suspectData: Partial<Omit<Suspect, "id" | "createdAt" | "createdBy">>
 ): Promise<void> {
-  const updatePayload = {
+  const updatePayload = cleanDocForFirestore({
     ...suspectData,
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   try {
     const suspectRef = doc(db, "suspects", suspectId);
-    await updateDoc(suspectRef, updatePayload);
+    await setDoc(suspectRef, updatePayload, { merge: true });
   } catch (error) {
-    console.warn("Aviso ao atualizar suspeito no Firestore:", error);
+    console.error("Erro ao atualizar suspeito no Firestore:", error);
   }
 
   try {
@@ -463,7 +465,7 @@ export async function deleteSuspect(suspectId: string): Promise<void> {
   try {
     await deleteDoc(doc(db, "suspects", suspectId));
   } catch (error) {
-    console.warn("Aviso ao deletar suspeito no Firestore:", error);
+    console.error("Erro ao deletar suspeito no Firestore:", error);
   }
 
   try {
@@ -707,17 +709,22 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
 }
 
 export async function addOccurrence(occurrence: Omit<Occurrence, "createdAt" | "updatedAt">): Promise<void> {
-  const fullOccurrence: Occurrence = {
+  const occId = occurrence.id || `OCOR-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  const fullOccurrence: Occurrence = cleanDocForFirestore({
     ...occurrence,
+    id: occId,
+    photos: Array.isArray(occurrence.photos) ? occurrence.photos.filter(Boolean) : occurrence.photoUrl ? [occurrence.photoUrl] : [],
+    involvedPeople: Array.isArray(occurrence.involvedPeople) ? occurrence.involvedPeople : [],
+    relatedSuspects: Array.isArray(occurrence.relatedSuspects) ? occurrence.relatedSuspects : [],
     createdAt: (occurrence as any).createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   try {
-    const occurrenceRef = doc(db, "occurrences", occurrence.id);
-    await setDoc(occurrenceRef, fullOccurrence);
+    const occurrenceRef = doc(db, "occurrences", fullOccurrence.id);
+    await setDoc(occurrenceRef, fullOccurrence, { merge: true });
   } catch (error) {
-    console.warn("Aviso ao adicionar ocorrência no Firestore:", error);
+    console.error("Erro ao gravar ocorrência no Firestore:", error);
   }
 
   try {
@@ -737,16 +744,16 @@ export async function updateOccurrence(
   occurrenceId: string,
   occurrenceData: Partial<Omit<Occurrence, "id" | "createdAt">>
 ): Promise<void> {
-  const updatePayload = {
+  const updatePayload = cleanDocForFirestore({
     ...occurrenceData,
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   try {
     const occurrenceRef = doc(db, "occurrences", occurrenceId);
-    await updateDoc(occurrenceRef, updatePayload);
+    await setDoc(occurrenceRef, updatePayload, { merge: true });
   } catch (error) {
-    console.warn("Aviso ao atualizar ocorrência no Firestore:", error);
+    console.error("Erro ao atualizar ocorrência no Firestore:", error);
   }
 
   try {
@@ -767,7 +774,7 @@ export async function deleteOccurrence(occurrenceId: string): Promise<void> {
   try {
     await deleteDoc(doc(db, "occurrences", occurrenceId));
   } catch (error) {
-    console.warn("Aviso ao deletar ocorrência no Firestore:", error);
+    console.error("Erro ao deletar ocorrência no Firestore:", error);
   }
 
   try {

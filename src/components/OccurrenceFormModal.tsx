@@ -346,9 +346,9 @@ export default function OccurrenceFormModal({
 
       // Primary envolvido name and vulgo
       const primaryInvolved = involvedPeople[0];
-      const primaryName = primaryInvolved?.name || undefined;
-      const primaryVulgo = primaryInvolved?.vulgo && primaryInvolved.vulgo !== "N/I" ? primaryInvolved.vulgo : undefined;
-      const primaryPhoto = coverPhoto || primaryInvolved?.photoUrl || undefined;
+      const primaryName = primaryInvolved?.name || "";
+      const primaryVulgo = primaryInvolved?.vulgo && primaryInvolved.vulgo !== "N/I" ? primaryInvolved.vulgo : "";
+      const primaryPhoto = coverPhoto || primaryInvolved?.photoUrl || "";
 
       const payload: Partial<Occurrence> = {
         title: title.trim().toUpperCase(),
