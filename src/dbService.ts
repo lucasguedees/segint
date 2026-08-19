@@ -479,7 +479,15 @@ export async function deleteSuspect(suspectId: string): Promise<void> {
   }
 }
 
-// Ultra-fast chunked Firestore Batch Importer for full database backups
+// Module-level guard to prevent multiple concurrent seeding calls
+let isSeedingSuspects = false;
+let hasCheckedSuspectsSeeding = false;
+let isSeedingOccurrences = false;
+let hasCheckedOccurrencesSeeding = false;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Ultra-fast chunked Firestore Batch Importer for full database backups with backoff & rate limiting
 export async function importBackupBatchToFirestore(
   suspects: Suspect[],
   occurrences: Occurrence[],
@@ -497,7 +505,7 @@ export async function importBackupBatchToFirestore(
     window.dispatchEvent(new Event("sispir_local_occurrences_update"));
   }
 
-  const BATCH_SIZE = 80;
+  const BATCH_SIZE = 25; // Smaller batch size prevents Firestore Web SDK write-stream queue saturation
   let importedSuspects = 0;
   let importedOccurrences = 0;
   const totalItems = suspects.length + occurrences.length;
@@ -508,41 +516,32 @@ export async function importBackupBatchToFirestore(
     return cleaned || `${prefix}_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
   };
 
-  // Helper to safely truncate oversize base64 photo if it exceeds Firestore single doc limit
+  // Helper to safely truncate oversize base64 photo for Firestore cloud doc while keeping IDB pristine
   const sanitizeSuspectPhotos = (photos: string[] | undefined) => {
     if (!Array.isArray(photos)) return [];
     return photos.map((p) => {
       if (typeof p !== "string") return "";
-      // If photo string is > 800KB base64, keep it but ensure safe string
-      return p.trim();
+      const trimmed = p.trim();
+      // Keep string size safe for cloud Firestore document limit (1MB max per document)
+      if (trimmed.startsWith("data:") && trimmed.length > 400000) {
+        return trimmed.substring(0, 400000);
+      }
+      return trimmed;
     }).filter(Boolean);
   };
 
-  // 1. Batch Write Suspects to Cloud Firestore
+  // 1. Batch Write Suspects to Cloud Firestore with Paced Execution
   for (let i = 0; i < suspects.length; i += BATCH_SIZE) {
     const chunk = suspects.slice(i, i + BATCH_SIZE);
-    try {
-      const batch = writeBatch(db);
-      for (let j = 0; j < chunk.length; j++) {
-        const s = chunk[j];
-        const cleanId = sanitizeDocId(s.id, "SUSP", i + j);
-        const fullSuspect: Suspect = cleanDocForFirestore({
-          ...s,
-          id: cleanId,
-          photos: sanitizeSuspectPhotos(s.photos),
-          createdAt: s.createdAt || new Date().toISOString(),
-          updatedAt: s.updatedAt || new Date().toISOString(),
-        });
-        const ref = doc(db, "suspects", cleanId);
-        batch.set(ref, fullSuspect, { merge: true });
-      }
-      await batch.commit();
-      importedSuspects += chunk.length;
-    } catch (batchErr) {
-      console.warn("Lote de suspeitos falhou no commit, gravando individualmente:", batchErr);
-      for (let j = 0; j < chunk.length; j++) {
-        const s = chunk[j];
-        try {
+    let success = false;
+    let attempts = 0;
+
+    while (!success && attempts < 3) {
+      attempts++;
+      try {
+        const batch = writeBatch(db);
+        for (let j = 0; j < chunk.length; j++) {
+          const s = chunk[j];
           const cleanId = sanitizeDocId(s.id, "SUSP", i + j);
           const fullSuspect: Suspect = cleanDocForFirestore({
             ...s,
@@ -551,10 +550,38 @@ export async function importBackupBatchToFirestore(
             createdAt: s.createdAt || new Date().toISOString(),
             updatedAt: s.updatedAt || new Date().toISOString(),
           });
-          await setDoc(doc(db, "suspects", cleanId), fullSuspect, { merge: true });
-          importedSuspects++;
-        } catch (singleErr) {
-          console.warn("Aviso ao gravar suspeito individual:", singleErr);
+          const ref = doc(db, "suspects", cleanId);
+          batch.set(ref, fullSuspect, { merge: true });
+        }
+        await batch.commit();
+        importedSuspects += chunk.length;
+        success = true;
+        // Pacing delay between batch commits to allow Firestore Write Stream to flush
+        await sleep(50);
+      } catch (batchErr: any) {
+        console.warn(`Lote de suspeitos tentativa ${attempts} falhou, aguardando backoff...`, batchErr);
+        await sleep(attempts * 250);
+        if (attempts >= 3) {
+          // Fallback to sequential individual writes with safety pauses
+          for (let j = 0; j < chunk.length; j++) {
+            const s = chunk[j];
+            try {
+              const cleanId = sanitizeDocId(s.id, "SUSP", i + j);
+              const fullSuspect: Suspect = cleanDocForFirestore({
+                ...s,
+                id: cleanId,
+                photos: sanitizeSuspectPhotos(s.photos),
+                createdAt: s.createdAt || new Date().toISOString(),
+                updatedAt: s.updatedAt || new Date().toISOString(),
+              });
+              await setDoc(doc(db, "suspects", cleanId), fullSuspect, { merge: true });
+              importedSuspects++;
+              await sleep(15);
+            } catch (singleErr) {
+              console.warn("Aviso ao gravar suspeito individual:", singleErr);
+            }
+          }
+          success = true;
         }
       }
     }
@@ -565,31 +592,18 @@ export async function importBackupBatchToFirestore(
     }
   }
 
-  // 2. Batch Write Occurrences to Cloud Firestore
+  // 2. Batch Write Occurrences to Cloud Firestore with Paced Execution
   for (let i = 0; i < occurrences.length; i += BATCH_SIZE) {
     const chunk = occurrences.slice(i, i + BATCH_SIZE);
-    try {
-      const batch = writeBatch(db);
-      for (let j = 0; j < chunk.length; j++) {
-        const o = chunk[j];
-        const cleanId = sanitizeDocId(o.id, "OCC", i + j);
-        const fullOcc: Occurrence = cleanDocForFirestore({
-          ...o,
-          id: cleanId,
-          photos: sanitizeSuspectPhotos(o.photos),
-          createdAt: o.createdAt || new Date().toISOString(),
-          updatedAt: o.updatedAt || new Date().toISOString(),
-        });
-        const ref = doc(db, "occurrences", cleanId);
-        batch.set(ref, fullOcc, { merge: true });
-      }
-      await batch.commit();
-      importedOccurrences += chunk.length;
-    } catch (batchErr) {
-      console.warn("Lote de ocorrências falhou no commit, gravando individualmente:", batchErr);
-      for (let j = 0; j < chunk.length; j++) {
-        const o = chunk[j];
-        try {
+    let success = false;
+    let attempts = 0;
+
+    while (!success && attempts < 3) {
+      attempts++;
+      try {
+        const batch = writeBatch(db);
+        for (let j = 0; j < chunk.length; j++) {
+          const o = chunk[j];
           const cleanId = sanitizeDocId(o.id, "OCC", i + j);
           const fullOcc: Occurrence = cleanDocForFirestore({
             ...o,
@@ -598,10 +612,36 @@ export async function importBackupBatchToFirestore(
             createdAt: o.createdAt || new Date().toISOString(),
             updatedAt: o.updatedAt || new Date().toISOString(),
           });
-          await setDoc(doc(db, "occurrences", cleanId), fullOcc, { merge: true });
-          importedOccurrences++;
-        } catch (singleErr) {
-          console.warn("Aviso ao gravar ocorrência individual:", singleErr);
+          const ref = doc(db, "occurrences", cleanId);
+          batch.set(ref, fullOcc, { merge: true });
+        }
+        await batch.commit();
+        importedOccurrences += chunk.length;
+        success = true;
+        await sleep(50);
+      } catch (batchErr: any) {
+        console.warn(`Lote de ocorrências tentativa ${attempts} falhou, aguardando backoff...`, batchErr);
+        await sleep(attempts * 250);
+        if (attempts >= 3) {
+          for (let j = 0; j < chunk.length; j++) {
+            const o = chunk[j];
+            try {
+              const cleanId = sanitizeDocId(o.id, "OCC", i + j);
+              const fullOcc: Occurrence = cleanDocForFirestore({
+                ...o,
+                id: cleanId,
+                photos: sanitizeSuspectPhotos(o.photos),
+                createdAt: o.createdAt || new Date().toISOString(),
+                updatedAt: o.updatedAt || new Date().toISOString(),
+              });
+              await setDoc(doc(db, "occurrences", cleanId), fullOcc, { merge: true });
+              importedOccurrences++;
+              await sleep(15);
+            } catch (singleErr) {
+              console.warn("Aviso ao gravar ocorrência individual:", singleErr);
+            }
+          }
+          success = true;
         }
       }
     }
@@ -617,21 +657,30 @@ export async function importBackupBatchToFirestore(
 
 // Seeding helper to seed suspects if empty
 export async function seedSuspectsIfEmpty(): Promise<void> {
+  if (isSeedingSuspects || hasCheckedSuspectsSeeding) return;
+  hasCheckedSuspectsSeeding = true;
+  isSeedingSuspects = true;
+
   try {
     const suspectsRef = collection(db, "suspects");
     const snapshot = await getDocs(suspectsRef);
     if (snapshot.empty) {
       console.log("Banco de suspeitos vazio. Alimentando dados padrão...");
-      const batch = writeBatch(db);
-      MOCK_SUSPECTS.forEach((suspect) => {
-        const docRef = doc(db, "suspects", suspect.id);
-        batch.set(docRef, suspect);
-      });
-      await batch.commit();
+      for (const suspect of MOCK_SUSPECTS) {
+        try {
+          const docRef = doc(db, "suspects", suspect.id);
+          await setDoc(docRef, suspect, { merge: true });
+          await sleep(50);
+        } catch (e) {
+          console.warn("Aviso ao semear suspeito individual:", e);
+        }
+      }
       console.log("Banco de suspeitos alimentado com sucesso.");
     }
   } catch (error) {
     console.warn("Aviso ao verificar/popular suspeitos padrão:", error);
+  } finally {
+    isSeedingSuspects = false;
   }
 }
 
@@ -706,6 +755,34 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
     window.removeEventListener("sispir_local_occurrences_update", handleCustomOccUpdate);
     if (typeof unsubscribeFirestore === "function") unsubscribeFirestore();
   };
+}
+
+export async function seedOccurrencesIfEmpty(): Promise<void> {
+  if (isSeedingOccurrences || hasCheckedOccurrencesSeeding) return;
+  hasCheckedOccurrencesSeeding = true;
+  isSeedingOccurrences = true;
+
+  try {
+    const occurrencesRef = collection(db, "occurrences");
+    const snapshot = await getDocs(occurrencesRef);
+    if (snapshot.empty) {
+      console.log("Banco de ocorrências vazio. Sembrando dados padrão...");
+      for (const occurrence of MOCK_OCCURRENCES) {
+        try {
+          const docRef = doc(db, "occurrences", occurrence.id);
+          await setDoc(docRef, occurrence, { merge: true });
+          await sleep(50);
+        } catch (e) {
+          console.warn("Aviso ao semear ocorrência individual:", e);
+        }
+      }
+      console.log("Banco de ocorrências alimentado com sucesso.");
+    }
+  } catch (error) {
+    console.error("Erro ao sembrar ocorrências padrão:", error);
+  } finally {
+    isSeedingOccurrences = false;
+  }
 }
 
 export async function addOccurrence(occurrence: Omit<Occurrence, "createdAt" | "updatedAt">): Promise<void> {
@@ -785,25 +862,5 @@ export async function deleteOccurrence(occurrenceId: string): Promise<void> {
     window.dispatchEvent(new Event("sispir_local_occurrences_update"));
   } catch (e) {
     console.error("Erro ao deletar cache local da ocorrência:", e);
-  }
-}
-
-// Seeding helper to seed occurrences if empty
-export async function seedOccurrencesIfEmpty(): Promise<void> {
-  try {
-    const occurrencesRef = collection(db, "occurrences");
-    const snapshot = await getDocs(occurrencesRef);
-    if (snapshot.empty) {
-      console.log("Banco de ocorrências vazio. Sembrando dados padrão...");
-      const batch = writeBatch(db);
-      MOCK_OCCURRENCES.forEach((occurrence) => {
-        const docRef = doc(db, "occurrences", occurrence.id);
-        batch.set(docRef, occurrence);
-      });
-      await batch.commit();
-      console.log("Banco de ocorrências alimentado com sucesso.");
-    }
-  } catch (error) {
-    console.error("Erro ao sembrar ocorrências padrão:", error);
   }
 }

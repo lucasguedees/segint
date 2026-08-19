@@ -636,9 +636,6 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
 
   // Listen to suspects
   useEffect(() => {
-    // Seed suspects if the database is completely empty so they have sample data immediately!
-    seedSuspectsIfEmpty();
-
     const unsubscribe = subscribeToSuspects((allSuspects) => {
       setSuspects(allSuspects);
       setLoading(false);
@@ -649,7 +646,6 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
 
   // Listen to occurrences
   useEffect(() => {
-    seedOccurrencesIfEmpty();
     const unsubscribe = subscribeToOccurrences((allOccurrences) => {
       setOccurrences(allOccurrences);
     });
