@@ -462,6 +462,14 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
           if (occ) normalizedOccs.push(occ);
         }
 
+        if (normalizedSuspects.length > 0) {
+          setSuspects(normalizedSuspects);
+        }
+        if (normalizedOccs.length > 0) {
+          setOccurrences(normalizedOccs);
+        }
+        setLoading(false);
+
         showToast(
           `Gravando ${normalizedSuspects.length} suspeitos e ${normalizedOccs.length} ocorrências no Firestore...`,
           "info"
@@ -474,6 +482,15 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
             showToast(msg, "info");
           }
         );
+
+        // Re-confirm state
+        if (normalizedSuspects.length > 0) {
+          setSuspects(normalizedSuspects);
+        }
+        if (normalizedOccs.length > 0) {
+          setOccurrences(normalizedOccs);
+        }
+        setLoading(false);
 
         showToast(
           `Backup gravado com sucesso no Firebase na Nuvem! (${result.totalSuspects} suspeitos, ${result.totalOccurrences} ocorrências)`,
