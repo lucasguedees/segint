@@ -310,6 +310,25 @@ export async function deleteUserProfile(uid: string): Promise<void> {
   localStorage.removeItem(`sispir_local_profile_${uid}`);
 }
 
+// Clean objects for Firestore to eliminate undefined/null and invalid types
+function cleanDocForFirestore<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined || value === null) {
+      result[key] = "";
+    } else if (Array.isArray(value)) {
+      result[key] = value
+        .filter((v) => v !== undefined && v !== null)
+        .map((v) => (typeof v === "object" ? cleanDocForFirestore(v) : String(v).trim()));
+    } else if (typeof value === "object" && !(value instanceof Date)) {
+      result[key] = cleanDocForFirestore(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 // --- Suspects Services ---
 
 export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
@@ -330,14 +349,25 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
   window.addEventListener("sispir_local_suspects_update", handleCustomLocalUpdate);
 
   const suspectsRef = collection(db, "suspects");
-  const q = query(suspectsRef, orderBy("createdAt", "desc"));
+  // Query all documents directly without restrictive index filtering
   const unsubscribeFirestore = onSnapshot(
-    q,
+    suspectsRef,
     (snapshot) => {
       const suspects: Suspect[] = [];
-      snapshot.forEach((doc) => {
-        suspects.push(doc.data() as Suspect);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Suspect;
+        suspects.push({
+          ...data,
+          id: data.id || docSnap.id,
+        });
       });
+
+      suspects.sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeB - timeA;
+      });
+
       // If Firestore returned documents, sync to local and update
       if (suspects.length > 0) {
         idbSet("sispir_local_suspects", suspects);
@@ -354,35 +384,14 @@ export function subscribeToSuspects(onUpdate: (suspects: Suspect[]) => void) {
       }
     },
     (error) => {
-      console.warn("Retrying suspect subscription with fallback query:", error);
-      return onSnapshot(
-        suspectsRef,
-        (snap) => {
-          const suspects: Suspect[] = [];
-          snap.forEach((doc) => {
-            suspects.push(doc.data() as Suspect);
-          });
-          suspects.sort((a, b) => {
-            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-            return timeB - timeA;
-          });
-          if (suspects.length > 0) {
-            idbSet("sispir_local_suspects", suspects);
-            onUpdate(suspects);
-          }
-        },
-        (nestedErr) => {
-          console.warn("Fallback suspects subscription error:", nestedErr);
-          idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
-            if (local && local.length > 0) {
-              onUpdate(local);
-            } else {
-              onUpdate(MOCK_SUSPECTS);
-            }
-          });
+      console.warn("Aviso na assinatura de suspeitos Firestore:", error);
+      idbGet<Suspect[]>("sispir_local_suspects").then((local) => {
+        if (local && local.length > 0) {
+          onUpdate(local);
+        } else {
+          onUpdate(MOCK_SUSPECTS);
         }
-      );
+      });
     }
   );
 
@@ -486,15 +495,25 @@ export async function importBackupBatchToFirestore(
     window.dispatchEvent(new Event("sispir_local_occurrences_update"));
   }
 
-  const BATCH_SIZE = 100; // Safe chunk size under Firestore payload limits
+  const BATCH_SIZE = 80;
   let importedSuspects = 0;
   let importedOccurrences = 0;
   const totalItems = suspects.length + occurrences.length;
 
-  // Helper to sanitize Firestore document ID (cannot contain slashes or invalid characters)
-  const sanitizeDocId = (id: string, prefix: string) => {
+  // Helper to sanitize Firestore document ID
+  const sanitizeDocId = (id: string, prefix: string, index: number) => {
     const cleaned = (id || "").toString().trim().replace(/[\/\s#?\[\]]+/g, "_");
-    return cleaned || `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    return cleaned || `${prefix}_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  };
+
+  // Helper to safely truncate oversize base64 photo if it exceeds Firestore single doc limit
+  const sanitizeSuspectPhotos = (photos: string[] | undefined) => {
+    if (!Array.isArray(photos)) return [];
+    return photos.map((p) => {
+      if (typeof p !== "string") return "";
+      // If photo string is > 800KB base64, keep it but ensure safe string
+      return p.trim();
+    }).filter(Boolean);
   };
 
   // 1. Batch Write Suspects to Cloud Firestore
@@ -502,35 +521,38 @@ export async function importBackupBatchToFirestore(
     const chunk = suspects.slice(i, i + BATCH_SIZE);
     try {
       const batch = writeBatch(db);
-      for (const s of chunk) {
-        const cleanId = sanitizeDocId(s.id, "SUSP");
-        const fullSuspect: Suspect = {
+      for (let j = 0; j < chunk.length; j++) {
+        const s = chunk[j];
+        const cleanId = sanitizeDocId(s.id, "SUSP", i + j);
+        const fullSuspect: Suspect = cleanDocForFirestore({
           ...s,
           id: cleanId,
+          photos: sanitizeSuspectPhotos(s.photos),
           createdAt: s.createdAt || new Date().toISOString(),
           updatedAt: s.updatedAt || new Date().toISOString(),
-        };
+        });
         const ref = doc(db, "suspects", cleanId);
-        batch.set(ref, fullSuspect);
+        batch.set(ref, fullSuspect, { merge: true });
       }
       await batch.commit();
       importedSuspects += chunk.length;
     } catch (batchErr) {
-      console.warn("Lote em massa falhou, gravando individualmente os suspeitos:", batchErr);
-      // Fallback: write individually so single item errors don't drop the rest
-      for (const s of chunk) {
+      console.warn("Lote de suspeitos falhou no commit, gravando individualmente:", batchErr);
+      for (let j = 0; j < chunk.length; j++) {
+        const s = chunk[j];
         try {
-          const cleanId = sanitizeDocId(s.id, "SUSP");
-          const fullSuspect: Suspect = {
+          const cleanId = sanitizeDocId(s.id, "SUSP", i + j);
+          const fullSuspect: Suspect = cleanDocForFirestore({
             ...s,
             id: cleanId,
+            photos: sanitizeSuspectPhotos(s.photos),
             createdAt: s.createdAt || new Date().toISOString(),
             updatedAt: s.updatedAt || new Date().toISOString(),
-          };
-          await setDoc(doc(db, "suspects", cleanId), fullSuspect);
+          });
+          await setDoc(doc(db, "suspects", cleanId), fullSuspect, { merge: true });
           importedSuspects++;
         } catch (singleErr) {
-          console.warn("Erro ao gravar suspeito individual:", singleErr);
+          console.warn("Aviso ao gravar suspeito individual:", singleErr);
         }
       }
     }
@@ -546,34 +568,38 @@ export async function importBackupBatchToFirestore(
     const chunk = occurrences.slice(i, i + BATCH_SIZE);
     try {
       const batch = writeBatch(db);
-      for (const o of chunk) {
-        const cleanId = sanitizeDocId(o.id, "OCC");
-        const fullOcc: Occurrence = {
+      for (let j = 0; j < chunk.length; j++) {
+        const o = chunk[j];
+        const cleanId = sanitizeDocId(o.id, "OCC", i + j);
+        const fullOcc: Occurrence = cleanDocForFirestore({
           ...o,
           id: cleanId,
+          photos: sanitizeSuspectPhotos(o.photos),
           createdAt: o.createdAt || new Date().toISOString(),
           updatedAt: o.updatedAt || new Date().toISOString(),
-        };
+        });
         const ref = doc(db, "occurrences", cleanId);
-        batch.set(ref, fullOcc);
+        batch.set(ref, fullOcc, { merge: true });
       }
       await batch.commit();
       importedOccurrences += chunk.length;
     } catch (batchErr) {
-      console.warn("Lote em massa falhou, gravando individualmente as ocorrências:", batchErr);
-      for (const o of chunk) {
+      console.warn("Lote de ocorrências falhou no commit, gravando individualmente:", batchErr);
+      for (let j = 0; j < chunk.length; j++) {
+        const o = chunk[j];
         try {
-          const cleanId = sanitizeDocId(o.id, "OCC");
-          const fullOcc: Occurrence = {
+          const cleanId = sanitizeDocId(o.id, "OCC", i + j);
+          const fullOcc: Occurrence = cleanDocForFirestore({
             ...o,
             id: cleanId,
+            photos: sanitizeSuspectPhotos(o.photos),
             createdAt: o.createdAt || new Date().toISOString(),
             updatedAt: o.updatedAt || new Date().toISOString(),
-          };
-          await setDoc(doc(db, "occurrences", cleanId), fullOcc);
+          });
+          await setDoc(doc(db, "occurrences", cleanId), fullOcc, { merge: true });
           importedOccurrences++;
         } catch (singleErr) {
-          console.warn("Erro ao gravar ocorrência individual:", singleErr);
+          console.warn("Aviso ao gravar ocorrência individual:", singleErr);
         }
       }
     }
@@ -631,14 +657,24 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
   window.addEventListener("sispir_local_occurrences_update", handleCustomOccUpdate);
 
   const occurrencesRef = collection(db, "occurrences");
-  const q = query(occurrencesRef, orderBy("createdAt", "desc"));
   const unsubscribeFirestore = onSnapshot(
-    q,
+    occurrencesRef,
     (snapshot) => {
       const occurrences: Occurrence[] = [];
-      snapshot.forEach((doc) => {
-        occurrences.push(doc.data() as Occurrence);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Occurrence;
+        occurrences.push({
+          ...data,
+          id: data.id || docSnap.id,
+        });
       });
+
+      occurrences.sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeB - timeA;
+      });
+
       if (occurrences.length > 0) {
         idbSet("sispir_local_occurrences", occurrences);
         onUpdate(occurrences);
@@ -653,30 +689,14 @@ export function subscribeToOccurrences(onUpdate: (occurrences: Occurrence[]) => 
       }
     },
     (error) => {
-      console.warn("Retrying occurrences subscription with fallback query:", error);
-      return onSnapshot(
-        occurrencesRef,
-        (snap) => {
-          const occurrences: Occurrence[] = [];
-          snap.forEach((doc) => {
-            occurrences.push(doc.data() as Occurrence);
-          });
-          if (occurrences.length > 0) {
-            idbSet("sispir_local_occurrences", occurrences);
-            onUpdate(occurrences);
-          }
-        },
-        (nestedErr) => {
-          console.warn("Fallback occurrences subscription error:", nestedErr);
-          idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
-            if (local && local.length > 0) {
-              onUpdate(local);
-            } else {
-              onUpdate(MOCK_OCCURRENCES);
-            }
-          });
+      console.warn("Aviso na assinatura de ocorrências Firestore:", error);
+      idbGet<Occurrence[]>("sispir_local_occurrences").then((local) => {
+        if (local && local.length > 0) {
+          onUpdate(local);
+        } else {
+          onUpdate(MOCK_OCCURRENCES);
         }
-      );
+      });
     }
   );
 

@@ -273,29 +273,76 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
   };
 
   // Helper to normalize any JSON suspect format (Portuguese/English schemas) into system Suspect model
-  const normalizeSuspectFromJSON = (s: any): Suspect | null => {
+  const normalizeSuspectFromJSON = (s: any, index: number = 0): Suspect | null => {
     if (!s || typeof s !== "object") return null;
 
-    // Name (supports `nome`, `name`, `envolvidoName`, `nomeCompleto`)
-    const name = (s.nome || s.name || s.envolvidoName || s.nomeCompleto || "").toString().trim();
-    if (!name) return null;
+    // Name (supports `nome`, `name`, `envolvidoName`, `nomeCompleto`, `suspeito`, etc.)
+    let name = (
+      s.name ||
+      s.nome ||
+      s.nomeCompleto ||
+      s.nome_completo ||
+      s.envolvidoName ||
+      s.suspeito ||
+      s.suspect ||
+      s.nomeIndividuo ||
+      s.identificacao ||
+      s.alvo ||
+      s.titulo ||
+      s.title ||
+      ""
+    ).toString().trim();
 
     // Alias / Alcunha
-    const alias = (s.alcunha || s.alias || s.vulgo || s.apelido || "").toString().trim();
+    const alias = (
+      s.alcunha ||
+      s.alias ||
+      s.vulgo ||
+      s.apelido ||
+      s.codinome ||
+      ""
+    ).toString().trim();
 
     // Document / RG / CPF
-    const document = (s.rgCpf || s.document || s.documento || s.rg || s.cpf || "").toString().trim();
+    const document = (
+      s.rgCpf ||
+      s.document ||
+      s.documento ||
+      s.rg ||
+      s.cpf ||
+      s.doc ||
+      ""
+    ).toString().trim();
+
+    if (!name) {
+      if (alias) {
+        name = `INDIVÍDUO (${alias.toUpperCase()})`;
+      } else if (document) {
+        name = `INDIVÍDUO DOC ${document}`;
+      } else if (s.id) {
+        name = `INDIVÍDUO #${s.id}`;
+      } else {
+        return null;
+      }
+    }
 
     // City / Area of Operation
-    const city = (s.cidade || s.municipio || s.areaOfOperation || s.areaAtuacao || "LAJEADO").toString().trim();
+    const city = (
+      s.cidade ||
+      s.municipio ||
+      s.areaOfOperation ||
+      s.areaAtuacao ||
+      s.bairro ||
+      "LAJEADO"
+    ).toString().trim();
 
     // Address
-    const address = (s.endereco || s.lastKnownAddress || s.rua || "").toString().trim();
+    const address = (s.endereco || s.lastKnownAddress || s.rua || s.logradouro || "").toString().trim();
 
     // Observations & Antecedentes & Features
-    const observations = (s.observacoes || s.observations || s.obs || s.rawText || "").toString().trim();
-    const antecedentes = (s.antecedentes || s.historicoCriminal || "").toString().trim();
-    const caracteristicas = (s.caracteristicas || s.tattoosScars || "").toString().trim();
+    const observations = (s.observacoes || s.observations || s.obs || s.rawText || s.detalhes || "").toString().trim();
+    const antecedentes = (s.antecedentes || s.historicoCriminal || s.passagens || "").toString().trim();
+    const caracteristicas = (s.caracteristicas || s.tattoosScars || s.tatuagens || "").toString().trim();
 
     // Photos array consolidation
     const photosArr: string[] = [];
@@ -311,10 +358,10 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
       }
     }
 
-    // 2. Single image field: `s.imagemUrl`, `s.photoUrl`, `s.fotoUrl`, `s.coverPhoto`, `s.foto`
-    const singleImg = s.imagemUrl || s.photoUrl || s.fotoUrl || s.coverPhoto || s.foto;
+    // 2. Single image field: `s.imagemUrl`, `s.photoUrl`, `s.fotoUrl`, `s.coverPhoto`, `s.foto`, `s.imagem`
+    const singleImg = s.imagemUrl || s.photoUrl || s.fotoUrl || s.coverPhoto || s.foto || s.imagem;
     if (typeof singleImg === "string" && singleImg.trim() && !photosArr.includes(singleImg.trim())) {
-      photosArr.unshift(singleImg.trim()); // Place primary photo first
+      photosArr.unshift(singleImg.trim());
     }
 
     // 3. `s.outrasFotos`
@@ -346,8 +393,11 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
       createdAt = s.dataCadastro.trim();
     }
 
+    const rawId = (s.id || s._id || s.codigo || "").toString().trim();
+    const finalId = rawId ? `SUSP-${rawId}` : `SUSP-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
     return {
-      id: (s.id || `SUSP-${Math.random().toString(36).substring(2, 8).toUpperCase()}`).toString(),
+      id: finalId,
       name,
       alias,
       document,
@@ -373,13 +423,13 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
   };
 
   // Helper to normalize any JSON occurrence format into system Occurrence model
-  const normalizeOccurrenceFromJSON = (occ: any): Occurrence | null => {
+  const normalizeOccurrenceFromJSON = (occ: any, index: number = 0): Occurrence | null => {
     if (!occ || typeof occ !== "object") return null;
 
-    const title = (occ.title || occ.titulo || occ.tipo || occ.nome || "").toString().trim();
+    const title = (occ.title || occ.titulo || occ.tipo || occ.nome || occ.natureza || "").toString().trim();
     if (!title) return null;
 
-    const description = (occ.description || occ.descricao || occ.observacoes || occ.obs || "").toString().trim();
+    const description = (occ.description || occ.descricao || occ.observacoes || occ.obs || occ.historico || "").toString().trim();
     const location = (occ.location || occ.local || occ.endereco || occ.cidade || occ.municipio || "LAJEADO").toString().trim();
 
     // Photos
@@ -390,13 +440,16 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
         else if (p && typeof p === "object" && p.url && typeof p.url === "string") photosArr.push(p.url.trim());
       }
     }
-    const singlePhoto = occ.photoUrl || occ.imagemUrl || occ.fotoUrl;
+    const singlePhoto = occ.photoUrl || occ.imagemUrl || occ.fotoUrl || occ.foto;
     if (typeof singlePhoto === "string" && singlePhoto.trim() && !photosArr.includes(singlePhoto.trim())) {
       photosArr.unshift(singlePhoto.trim());
     }
 
+    const rawId = (occ.id || occ._id || occ.numero || "").toString().trim();
+    const finalId = rawId ? `OCOR-${rawId}` : `OCOR-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
     return {
-      id: (occ.id || `OCOR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`).toString(),
+      id: finalId,
       title,
       description,
       location,
@@ -427,39 +480,81 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
         const content = event.target?.result as string;
         if (!content) return;
 
-        showToast("Lendo arquivo de backup...", "info");
+        showToast("Lendo e decodificando arquivo de backup...", "info");
         const data = JSON.parse(content);
 
-        const rawSuspectsList = Array.isArray(data)
-          ? data
-          : Array.isArray(data.suspects)
-          ? data.suspects
-          : Array.isArray(data.suspeitos)
-          ? data.suspeitos
-          : Array.isArray(data.data)
-          ? data.data
-          : Array.isArray(data.items)
-          ? data.items
-          : typeof data === "object" && (data.nome || data.name)
-          ? [data]
-          : [];
+        let rawSuspectsList: any[] = [];
+        let rawOccList: any[] = [];
 
-        const normalizedSuspects: Suspect[] = [];
-        for (const rawSuspect of rawSuspectsList) {
-          const s = normalizeSuspectFromJSON(rawSuspect);
-          if (s) normalizedSuspects.push(s);
+        if (Array.isArray(data)) {
+          rawSuspectsList = data;
+        } else if (typeof data === "object" && data !== null) {
+          if (Array.isArray(data.suspects)) rawSuspectsList = data.suspects;
+          else if (Array.isArray(data.suspeitos)) rawSuspectsList = data.suspeitos;
+          else if (Array.isArray(data.data)) rawSuspectsList = data.data;
+          else if (Array.isArray(data.items)) rawSuspectsList = data.items;
+          else if (Array.isArray(data.records)) rawSuspectsList = data.records;
+          else if (Array.isArray(data.rows)) rawSuspectsList = data.rows;
+          else if (Array.isArray(data.pessoas)) rawSuspectsList = data.pessoas;
+          else if (Array.isArray(data.individuos)) rawSuspectsList = data.individuos;
+          else if (Array.isArray(data.cadastros)) rawSuspectsList = data.cadastros;
+          else if (Array.isArray(data.alvos)) rawSuspectsList = data.alvos;
+          else {
+            const values = Object.values(data);
+            const suspectLike = values.filter(
+              (v: any) =>
+                v &&
+                typeof v === "object" &&
+                (v.nome || v.name || v.alcunha || v.alias || v.vulgo || v.cpf || v.rg || v.documento || v.suspeito)
+            );
+            if (suspectLike.length > 0) {
+              rawSuspectsList = suspectLike;
+            } else if (data.nome || data.name || data.suspeito) {
+              rawSuspectsList = [data];
+            }
+          }
+
+          if (Array.isArray(data.occurrences)) rawOccList = data.occurrences;
+          else if (Array.isArray(data.ocorrencias)) rawOccList = data.ocorrencias;
+          else if (Array.isArray(data.events)) rawOccList = data.events;
         }
 
-        const rawOccList = Array.isArray(data.occurrences)
-          ? data.occurrences
-          : Array.isArray(data.ocorrencias)
-          ? data.ocorrencias
-          : [];
+        const normalizedSuspects: Suspect[] = [];
+        const seenIds = new Set<string>();
+
+        for (let i = 0; i < rawSuspectsList.length; i++) {
+          const s = normalizeSuspectFromJSON(rawSuspectsList[i], i);
+          if (s) {
+            // Deduplicate ID to avoid overwriting items sharing IDs
+            let uniqueId = s.id;
+            let counter = 1;
+            while (seenIds.has(uniqueId)) {
+              uniqueId = `${s.id}_${counter++}`;
+            }
+            seenIds.add(uniqueId);
+            normalizedSuspects.push({ ...s, id: uniqueId });
+          }
+        }
 
         const normalizedOccs: Occurrence[] = [];
-        for (const rawOcc of rawOccList) {
-          const occ = normalizeOccurrenceFromJSON(rawOcc);
-          if (occ) normalizedOccs.push(occ);
+        const seenOccIds = new Set<string>();
+
+        for (let i = 0; i < rawOccList.length; i++) {
+          const occ = normalizeOccurrenceFromJSON(rawOccList[i], i);
+          if (occ) {
+            let uniqueId = occ.id;
+            let counter = 1;
+            while (seenOccIds.has(uniqueId)) {
+              uniqueId = `${occ.id}_${counter++}`;
+            }
+            seenOccIds.add(uniqueId);
+            normalizedOccs.push({ ...occ, id: uniqueId });
+          }
+        }
+
+        if (normalizedSuspects.length === 0 && normalizedOccs.length === 0) {
+          showToast("Nenhum registro reconhecido no arquivo JSON.", "error");
+          return;
         }
 
         if (normalizedSuspects.length > 0) {
@@ -471,7 +566,7 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
         setLoading(false);
 
         showToast(
-          `Gravando ${normalizedSuspects.length} suspeitos e ${normalizedOccs.length} ocorrências no Firestore...`,
+          `Gravando ${normalizedSuspects.length} suspeitos e ${normalizedOccs.length} ocorrências no Cloud Firestore...`,
           "info"
         );
 
@@ -482,15 +577,6 @@ export default function Dashboard({ currentUser, onLogout }: DashboardProps) {
             showToast(msg, "info");
           }
         );
-
-        // Re-confirm state
-        if (normalizedSuspects.length > 0) {
-          setSuspects(normalizedSuspects);
-        }
-        if (normalizedOccs.length > 0) {
-          setOccurrences(normalizedOccs);
-        }
-        setLoading(false);
 
         showToast(
           `Backup gravado com sucesso no Firebase na Nuvem! (${result.totalSuspects} suspeitos, ${result.totalOccurrences} ocorrências)`,
