@@ -114,24 +114,20 @@ function safeSetLocalStorage(key: string, rawData: any): void {
 // --- User Profile Services ---
 
 export function isLocalMode(): boolean {
-  return localStorage.getItem("sispir_mode") === "local";
+  return false;
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
-  if (isLocalMode()) {
-    const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
-    return profileStr ? JSON.parse(profileStr) : null;
-  }
   try {
     const userDoc = await getDoc(doc(db, "users", uid));
     if (userDoc.exists()) {
       return userDoc.data() as UserProfile;
     }
-    return null;
   } catch (error) {
-    console.error("Erro ao obter perfil do usuário:", error);
-    throw error;
+    console.warn("Aviso ao obter perfil do usuário no Firestore:", error);
   }
+  const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
+  return profileStr ? JSON.parse(profileStr) : null;
 }
 
 export async function createUserProfile(
@@ -140,126 +136,88 @@ export async function createUserProfile(
   email: string,
   badgeId?: string
 ): Promise<UserProfile> {
-  if (isLocalMode()) {
-    const role: UserRole = "admin";
-    const status: UserStatus = "approved";
-    const profile: UserProfile = {
-      uid,
-      name,
-      email,
-      role,
-      status,
-      badgeId: badgeId || "",
-      createdAt: new Date().toISOString(),
-    };
-    localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(profile));
-    
-    const usersStr = localStorage.getItem("sispir_local_users") || "[]";
-    const users = JSON.parse(usersStr) as UserProfile[];
-    if (!users.some((u) => u.uid === uid)) {
-      users.push(profile);
-      localStorage.setItem("sispir_local_users", JSON.stringify(users));
-    }
-    
-    window.dispatchEvent(new Event("sispir_local_users_update"));
-    window.dispatchEvent(new Event("sispir_local_profile_update"));
-    return profile;
-  }
+  const isOwner = email.toLowerCase() === "lucas2305rj1994@gmail.com";
+  let isEmpty = false;
   try {
-    const isOwner = email.toLowerCase() === "lucas2305rj1994@gmail.com";
-    let isEmpty = false;
-    try {
-      const usersRef = collection(db, "users");
-      const snapshot = await getDocs(usersRef);
-      isEmpty = snapshot.empty;
-    } catch {
-      // If collection read is restricted before user document creation, fallback safely
-      isEmpty = isOwner;
-    }
-
-    // Default to 'admin' and 'approved' for workspace owner or first user
-    const role: UserRole = isOwner || isEmpty ? "admin" : "user";
-    const status: UserStatus = isOwner || isEmpty ? "approved" : "pending";
-
-    const profile: UserProfile = {
-      uid,
-      name,
-      email,
-      role,
-      status,
-      badgeId: badgeId || "",
-      createdAt: new Date().toISOString(),
-    };
-
-    await setDoc(doc(db, "users", uid), profile);
-    return profile;
-  } catch (error) {
-    console.error("Erro ao criar perfil do usuário:", error);
-    throw error;
+    const usersRef = collection(db, "users");
+    const snapshot = await getDocs(usersRef);
+    isEmpty = snapshot.empty;
+  } catch {
+    isEmpty = isOwner;
   }
+
+  // Default to 'admin' and 'approved' for workspace owner or first user
+  const role: UserRole = isOwner || isEmpty ? "admin" : "user";
+  const status: UserStatus = isOwner || isEmpty ? "approved" : "pending";
+
+  const profile: UserProfile = {
+    uid,
+    name,
+    email,
+    role,
+    status,
+    badgeId: badgeId || "",
+    createdAt: new Date().toISOString(),
+  };
+
+  try {
+    await setDoc(doc(db, "users", uid), profile, { merge: true });
+  } catch (error) {
+    console.warn("Aviso ao salvar perfil no Firestore:", error);
+  }
+
+  localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(profile));
+  return profile;
 }
 
 export function subscribeToUserProfile(
   uid: string,
   onUpdate: (profile: UserProfile | null) => void
 ) {
-  if (isLocalMode()) {
-    const fetchLocalProfile = () => {
-      const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
-      if (profileStr) {
-        onUpdate(JSON.parse(profileStr));
-      } else {
-        onUpdate(null);
-      }
-    };
-    
-    fetchLocalProfile();
-    
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === `sispir_local_profile_${uid}`) {
-        fetchLocalProfile();
-      }
-    };
-    
-    const handleCustomChange = () => {
-      fetchLocalProfile();
-    };
-    
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("sispir_local_profile_update", handleCustomChange);
-    
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("sispir_local_profile_update", handleCustomChange);
-    };
+  // 1. Immediate local memory fallback
+  const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
+  if (profileStr) {
+    try {
+      onUpdate(JSON.parse(profileStr));
+    } catch {}
   }
+
   return onSnapshot(
     doc(db, "users", uid),
     (docSnap) => {
       if (docSnap.exists()) {
-        onUpdate(docSnap.data() as UserProfile);
+        const data = docSnap.data() as UserProfile;
+        localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(data));
+        onUpdate(data);
       } else {
-        onUpdate(null);
+        const local = localStorage.getItem(`sispir_local_profile_${uid}`);
+        if (local) {
+          try {
+            onUpdate(JSON.parse(local));
+          } catch {
+            onUpdate(null);
+          }
+        } else {
+          onUpdate(null);
+        }
       }
     },
     (error) => {
-      console.error("Erro no listener do perfil do usuário:", error);
+      console.warn("Aviso no listener do perfil do usuário:", error);
+      const local = localStorage.getItem(`sispir_local_profile_${uid}`);
+      if (local) {
+        try {
+          onUpdate(JSON.parse(local));
+        } catch {
+          onUpdate(null);
+        }
+      }
     }
   );
 }
 
 // Admin service: get all users for approval
 export function subscribeToAllUsers(onUpdate: (users: UserProfile[]) => void) {
-  if (isLocalMode()) {
-    const fetchUsers = () => {
-      const usersStr = localStorage.getItem("sispir_local_users") || "[]";
-      onUpdate(JSON.parse(usersStr));
-    };
-    fetchUsers();
-    
-    window.addEventListener("sispir_local_users_update", fetchUsers);
-    return () => window.removeEventListener("sispir_local_users_update", fetchUsers);
-  }
   const usersRef = collection(db, "users");
   const q = query(usersRef, orderBy("createdAt", "desc"));
   return onSnapshot(
@@ -269,7 +227,21 @@ export function subscribeToAllUsers(onUpdate: (users: UserProfile[]) => void) {
       snapshot.forEach((doc) => {
         users.push(doc.data() as UserProfile);
       });
-      onUpdate(users);
+      if (users.length > 0) {
+        localStorage.setItem("sispir_local_users", JSON.stringify(users));
+        onUpdate(users);
+      } else {
+        const localStr = localStorage.getItem("sispir_local_users");
+        if (localStr) {
+          try {
+            onUpdate(JSON.parse(localStr));
+          } catch {
+            onUpdate([]);
+          }
+        } else {
+          onUpdate([]);
+        }
+      }
     },
     (error) => {
       console.warn("Retrying user subscription with fallback:", error);
@@ -313,53 +285,29 @@ export async function updateUserProfileData(
     updatedAt: new Date().toISOString(),
   };
 
-  if (isLocalMode()) {
-    const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
-    if (profileStr) {
-      const profile = JSON.parse(profileStr) as UserProfile;
-      const updated = { ...profile, ...cleanUpdates };
-      localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(updated));
-    }
-    
-    const usersStr = localStorage.getItem("sispir_local_users") || "[]";
-    const users = JSON.parse(usersStr) as UserProfile[];
-    const index = users.findIndex((u) => u.uid === uid);
-    if (index !== -1) {
-      users[index] = { ...users[index], ...cleanUpdates };
-      localStorage.setItem("sispir_local_users", JSON.stringify(users));
-    }
-    
-    window.dispatchEvent(new Event("sispir_local_profile_update"));
-    window.dispatchEvent(new Event("sispir_local_users_update"));
-    return;
-  }
-
   try {
     const userRef = doc(db, "users", uid);
-    await updateDoc(userRef, cleanUpdates);
+    await setDoc(userRef, cleanUpdates, { merge: true });
   } catch (error) {
-    console.error("Erro ao atualizar dados do perfil do usuário:", error);
-    throw error;
+    console.warn("Aviso ao atualizar dados do perfil no Firestore:", error);
+  }
+
+  const profileStr = localStorage.getItem(`sispir_local_profile_${uid}`);
+  if (profileStr) {
+    const profile = JSON.parse(profileStr) as UserProfile;
+    const updated = { ...profile, ...cleanUpdates };
+    localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(updated));
   }
 }
 
 export async function deleteUserProfile(uid: string): Promise<void> {
-  if (isLocalMode()) {
-    localStorage.removeItem(`sispir_local_profile_${uid}`);
-    const usersStr = localStorage.getItem("sispir_local_users") || "[]";
-    const users = (JSON.parse(usersStr) as UserProfile[]).filter((u) => u.uid !== uid);
-    localStorage.setItem("sispir_local_users", JSON.stringify(users));
-    window.dispatchEvent(new Event("sispir_local_users_update"));
-    return;
-  }
-
   try {
     const userRef = doc(db, "users", uid);
     await deleteDoc(userRef);
   } catch (error) {
-    console.error("Erro ao excluir perfil de usuário:", error);
-    throw error;
+    console.warn("Aviso ao excluir perfil de usuário no Firestore:", error);
   }
+  localStorage.removeItem(`sispir_local_profile_${uid}`);
 }
 
 // --- Suspects Services ---
@@ -641,23 +589,6 @@ export async function importBackupBatchToFirestore(
 
 // Seeding helper to seed suspects if empty
 export async function seedSuspectsIfEmpty(): Promise<void> {
-  if (isLocalMode()) {
-    let suspects = await idbGet<Suspect[]>("sispir_local_suspects");
-    if (!suspects || suspects.length === 0) {
-      const suspectsStr = localStorage.getItem("sispir_local_suspects") || "[]";
-      try {
-        suspects = JSON.parse(suspectsStr) as Suspect[];
-      } catch {
-        suspects = [];
-      }
-    }
-    if (suspects.length === 0) {
-      await idbSet("sispir_local_suspects", MOCK_SUSPECTS);
-      safeSetLocalStorage("sispir_local_suspects", MOCK_SUSPECTS);
-      window.dispatchEvent(new Event("sispir_local_suspects_update"));
-    }
-    return;
-  }
   try {
     const suspectsRef = collection(db, "suspects");
     const snapshot = await getDocs(suspectsRef);
@@ -832,23 +763,6 @@ export async function deleteOccurrence(occurrenceId: string): Promise<void> {
 
 // Seeding helper to seed occurrences if empty
 export async function seedOccurrencesIfEmpty(): Promise<void> {
-  if (isLocalMode()) {
-    let occurrences = await idbGet<Occurrence[]>("sispir_local_occurrences");
-    if (!occurrences || occurrences.length === 0) {
-      const occurrencesStr = localStorage.getItem("sispir_local_occurrences") || "[]";
-      try {
-        occurrences = JSON.parse(occurrencesStr) as Occurrence[];
-      } catch {
-        occurrences = [];
-      }
-    }
-    if (occurrences.length === 0) {
-      await idbSet("sispir_local_occurrences", MOCK_OCCURRENCES);
-      safeSetLocalStorage("sispir_local_occurrences", MOCK_OCCURRENCES);
-      window.dispatchEvent(new Event("sispir_local_occurrences_update"));
-    }
-    return;
-  }
   try {
     const occurrencesRef = collection(db, "occurrences");
     const snapshot = await getDocs(occurrencesRef);

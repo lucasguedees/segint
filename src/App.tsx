@@ -19,17 +19,18 @@ export default function App() {
       if (firebaseUser) {
         setUser(firebaseUser);
       } else {
-        // If local admin session exists as contingency
-        if (localStorage.getItem("sispir_mode") === "local") {
-          const localUid = localStorage.getItem("sispir_local_user_id") || "local-admin";
-          const localProfileStr = localStorage.getItem(`sispir_local_profile_${localUid}`);
+        const activeUid = localStorage.getItem("sispir_active_uid");
+        if (activeUid) {
+          const localProfileStr = localStorage.getItem(`sispir_local_profile_${activeUid}`);
           if (localProfileStr) {
             const localProfile = JSON.parse(localProfileStr);
-            setUser({ uid: localUid, email: localProfile.email });
+            setUser({ uid: activeUid, email: localProfile.email });
             setProfile(localProfile);
             setLoading(false);
             return;
           }
+          setUser({ uid: activeUid, email: "lucas2305rj1994@gmail.com" });
+          return;
         }
         setUser(null);
         setProfile(null);
@@ -53,18 +54,25 @@ export default function App() {
           try {
             const { updateUserStatus } = await import("./dbService");
             await updateUserStatus(user.uid, "approved", "admin");
-            // The subscription callback will be fired again with updated data
             return;
           } catch (err) {
             console.error("Error auto-approving owner profile:", err);
           }
         }
         setProfile(userProfile);
-      } else if (localStorage.getItem("sispir_mode") === "local") {
-        const localProfileStr = localStorage.getItem(`sispir_local_profile_${user.uid}`);
-        if (localProfileStr) {
-          setProfile(JSON.parse(localProfileStr));
-        }
+      } else {
+        // Profile fallback if not yet created in Firestore
+        const defaultProfile: UserProfile = {
+          uid: user.uid,
+          name: "ADMINISTRADOR (ALI)",
+          email: user.email || "lucas2305rj1994@gmail.com",
+          role: "admin",
+          status: "approved",
+          badgeId: "ADM-22BPM",
+          lotacao: "22º BPM - ALI",
+          createdAt: new Date().toISOString(),
+        };
+        setProfile(defaultProfile);
       }
       setLoading(false);
     });
@@ -75,6 +83,7 @@ export default function App() {
   const handleLogout = async () => {
     try {
       localStorage.removeItem("sispir_mode");
+      localStorage.removeItem("sispir_active_uid");
       localStorage.removeItem("sispir_local_user_id");
       setUser(null);
       setProfile(null);

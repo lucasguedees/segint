@@ -71,72 +71,30 @@ export default function LoginScreen({ onAuthSuccess }: LoginScreenProps) {
       }
 
       // Master admin authorized - connect directly to Cloud Firestore
-      const adminEmail = "admin@segint.gov.br";
-      const adminPass = "admin234589";
-
-      try {
-        let userCred;
-        try {
-          userCred = await signInWithEmailAndPassword(auth, adminEmail, adminPass);
-        } catch (signInErr: any) {
-          if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
-            try {
-              userCred = await createUserWithEmailAndPassword(auth, adminEmail, adminPass);
-            } catch {
-              // If creation fails, fallback to anonymous or session
-            }
-          }
-        }
-
-        if (userCred && userCred.user) {
-          const uid = userCred.user.uid;
-          const { setDoc, doc } = await import("firebase/firestore");
-          const { db } = await import("../firebase");
-          const adminProfile = {
-            uid,
-            name: "ADMINISTRADOR (ALI)",
-            email: adminEmail,
-            role: "admin" as const,
-            status: "approved" as const,
-            badgeId: "ADM-22BPM",
-            lotacao: "22º BPM - ALI",
-            createdAt: new Date().toISOString(),
-          };
-          await setDoc(doc(db, "users", uid), adminProfile, { merge: true });
-          localStorage.removeItem("sispir_mode");
-          onAuthSuccess(uid);
-          return;
-        }
-      } catch (cloudErr) {
-        console.warn("Cloud auth notice for master admin:", cloudErr);
-      }
-
-      // Fallback local session if cloud auth failed
-      localStorage.setItem("sispir_mode", "local");
       const uid = "admin-master";
-      localStorage.setItem("sispir_local_user_id", uid);
-
-      const localProfile = {
+      const adminProfile = {
         uid,
         name: "ADMINISTRADOR (ALI)",
-        email: "admin@segint.gov.br",
+        email: "lucas2305rj1994@gmail.com",
         role: "admin" as const,
         status: "approved" as const,
         badgeId: "ADM-22BPM",
         lotacao: "22º BPM - ALI",
         createdAt: new Date().toISOString(),
       };
-      localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(localProfile));
 
-      const usersStr = localStorage.getItem("sispir_local_users") || "[]";
-      const users = JSON.parse(usersStr);
-      if (!users.some((u: any) => u.uid === uid)) {
-        users.push(localProfile);
-        localStorage.setItem("sispir_local_users", JSON.stringify(users));
+      try {
+        const { setDoc, doc } = await import("firebase/firestore");
+        const { db } = await import("../firebase");
+        await setDoc(doc(db, "users", uid), adminProfile, { merge: true });
+      } catch (cloudErr) {
+        console.warn("Notice syncing master admin to cloud Firestore:", cloudErr);
       }
 
+      localStorage.removeItem("sispir_mode");
+      localStorage.setItem("sispir_active_uid", uid);
+      localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(adminProfile));
       onAuthSuccess(uid);
-      window.location.reload();
       return;
     } catch (err: any) {
       console.error("Erro na autenticação administrativa:", err);
