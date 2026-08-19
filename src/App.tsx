@@ -80,6 +80,27 @@ export default function App() {
     return () => unsubscribeProfile();
   }, [user]);
 
+  const handleAuthSuccess = (uid: string) => {
+    const activeUid = uid || "admin-master";
+    const localProfileStr = localStorage.getItem(`sispir_local_profile_${activeUid}`);
+    let initialProfile: UserProfile | null = localProfileStr ? JSON.parse(localProfileStr) : null;
+    if (!initialProfile) {
+      initialProfile = {
+        uid: activeUid,
+        name: "ADMINISTRADOR (ALI)",
+        email: "lucas2305rj1994@gmail.com",
+        role: "admin",
+        status: "approved",
+        badgeId: "ADM-22BPM",
+        lotacao: "22º BPM - ALI",
+        createdAt: new Date().toISOString(),
+      };
+    }
+    setUser({ uid: activeUid, email: initialProfile.email });
+    setProfile(initialProfile);
+    setLoading(false);
+  };
+
   const handleLogout = async () => {
     try {
       localStorage.removeItem("sispir_mode");
@@ -116,7 +137,7 @@ export default function App() {
 
   // 2. Unauthenticated user
   if (!user || !profile) {
-    return <LoginScreen onAuthSuccess={(uid) => {}} />;
+    return <LoginScreen onAuthSuccess={handleAuthSuccess} />;
   }
 
   // 3. Authenticated - Rejected Access Screen

@@ -123,27 +123,41 @@ export default function LoginScreen({ onAuthSuccess }: LoginScreenProps) {
         localStorage.removeItem("segint_saved_email");
       }
 
+      // Check if entering with master credentials
+      const cleanEmail = email.trim().toLowerCase();
+      if ((cleanEmail === "lucas2305rj1994@gmail.com" || cleanEmail === "admin@segint.gov.br") && (password === "234589" || password === "admin234589")) {
+        const uid = "admin-master";
+        const adminProfile = {
+          uid,
+          name: "ADMINISTRADOR (ALI)",
+          email: "lucas2305rj1994@gmail.com",
+          role: "admin" as const,
+          status: "approved" as const,
+          badgeId: "ADM-22BPM",
+          lotacao: "22º BPM - ALI",
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          const { setDoc, doc } = await import("firebase/firestore");
+          const { db } = await import("../firebase");
+          await setDoc(doc(db, "users", uid), adminProfile, { merge: true });
+        } catch (cloudErr) {
+          console.warn("Notice syncing master admin to cloud Firestore:", cloudErr);
+        }
+
+        localStorage.removeItem("sispir_mode");
+        localStorage.setItem("sispir_active_uid", uid);
+        localStorage.setItem(`sispir_local_profile_${uid}`, JSON.stringify(adminProfile));
+        onAuthSuccess(uid);
+        return;
+      }
+
       // Try Firebase Auth
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
         onAuthSuccess(userCredential.user.uid);
       } catch (fbErr: any) {
-        // If local user exists or in contingency
-        const localUsersStr = localStorage.getItem("sispir_local_users");
-        if (localUsersStr) {
-          const localUsers = JSON.parse(localUsersStr);
-          const found = localUsers.find(
-            (u: any) => u.email?.toLowerCase() === email.trim().toLowerCase()
-          );
-          if (found) {
-            localStorage.setItem("sispir_mode", "local");
-            localStorage.setItem("sispir_local_user_id", found.uid);
-            onAuthSuccess(found.uid);
-            window.location.reload();
-            return;
-          }
-        }
-
         if (fbErr.code === "auth/invalid-credential" || fbErr.code === "auth/wrong-password" || fbErr.code === "auth/user-not-found") {
           throw new Error("Credenciais inválidas. Verifique seu e-mail e senha de acesso.");
         } else if (fbErr.code === "auth/too-many-requests") {
