@@ -1,107 +1,80 @@
 {
   "entities": {
-    "UserProfile": {
-      "title": "UserProfile",
-      "description": "User profile in SISPIR",
-      "type": "object",
-      "properties": {
-        "uid": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "role": { "type": "string", "enum": ["admin", "user"] },
-        "status": { "type": "string", "enum": ["approved", "pending", "rejected"] },
-        "createdAt": { "type": "string" },
-        "approvedAt": { "type": "string" }
-      },
-      "required": ["uid", "name", "email", "role", "status"]
-    },
-    "Suspect": {
-      "title": "Suspect",
-      "description": "Suspect profile record",
+    "cities": {
+      "title": "Cities",
+      "description": "Monitored river cities",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
-        "alias": { "type": "string" },
-        "document": { "type": "string" },
-        "status": { "type": "string" },
-        "birthDate": { "type": "string" },
-        "motherName": { "type": "string" },
-        "faction": { "type": "string" },
-        "areaOfOperation": { "type": "string" },
-        "municipio": { "type": "string" },
-        "lastKnownAddress": { "type": "string" },
-        "observations": { "type": "string" },
-        "antecedentes": { "type": "string" },
-        "tattoosScars": { "type": "string" },
-        "alvoEmFoco": { "type": "boolean" },
-        "alvoEmFocoReason": { "type": "string" },
-        "foragido": { "type": "boolean" },
-        "mandadoNumero": { "type": "string" },
-        "photos": { "type": "array" },
-        "createdBy": { "type": "string" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "normalLevel": { "type": "number" },
+        "attentionLevel": { "type": "number" },
+        "alertLevel": { "type": "number" },
+        "floodLevel": { "type": "number" },
+        "majorFloodLevel": { "type": "number" }
       },
-      "required": ["id", "name", "status"]
+      "required": ["id", "name"]
     },
-    "Occurrence": {
-      "title": "Occurrence",
-      "description": "Police occurrence report",
+    "readings": {
+      "title": "River Readings",
+      "description": "Historical river level measurements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "cityId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "level": { "type": "number" },
+        "dataSource": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "cityId", "timestamp", "level"]
+    },
+    "shelters": {
+      "title": "Shelters",
+      "description": "Shelter locations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "cityId": { "type": "string" },
+        "cityName": { "type": "string" },
+        "capacity": { "type": "number" },
+        "address": { "type": "string" },
+        "contact": { "type": "string" }
+      },
+      "required": ["id", "name", "cityName"]
+    },
+    "shelterReadings": {
+      "title": "Shelter Readings",
+      "description": "Occupancy records for shelters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "shelterId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "peopleCount": { "type": "number" },
+        "familiesCount": { "type": "number" },
+        "dataSource": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "shelterId", "timestamp", "peopleCount"]
+    },
+    "videos": {
+      "title": "YouTube Videos",
+      "description": "Shared YouTube videos and live streams",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "title": { "type": "string" },
-        "description": { "type": "string" },
-        "location": { "type": "string" },
-        "date": { "type": "string" },
-        "time": { "type": "string" },
-        "severity": { "type": "string" },
-        "status": { "type": "string" },
-        "agentInCharge": { "type": "string" },
-        "envolvidoName": { "type": "string" },
-        "vulgo": { "type": "string" },
-        "photoUrl": { "type": "string" },
-        "photos": { "type": "array" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["id", "title"]
-    },
-    "AuditLog": {
-      "title": "AuditLog",
-      "description": "System action audit log entry",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "action": { "type": "string" },
-        "actionLabel": { "type": "string" },
+        "youtubeUrl": { "type": "string" },
+        "youtubeId": { "type": "string" },
         "category": { "type": "string" },
-        "performedBy": { "type": "object" },
-        "targetId": { "type": "string" },
-        "targetName": { "type": "string" },
-        "details": { "type": "string" },
-        "timestamp": { "type": "string" }
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "isFeatured": { "type": "boolean" }
       },
-      "required": ["id", "action", "actionLabel", "category", "performedBy", "details", "timestamp"]
-    }
-  },
-  "firestore": {
-    "/users/{userId}": {
-      "schema": "UserProfile",
-      "description": "User profiles"
-    },
-    "/suspects/{suspectId}": {
-      "schema": "Suspect",
-      "description": "Suspect records"
-    },
-    "/occurrences/{occurrenceId}": {
-      "schema": "Occurrence",
-      "description": "Occurrence records"
-    },
-    "/audit_logs/{logId}": {
-      "schema": "AuditLog",
-      "description": "System action audit records"
+      "required": ["id", "title", "youtubeUrl", "youtubeId"]
     }
   }
 }

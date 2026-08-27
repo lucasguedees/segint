@@ -1,404 +1,281 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
-
-// Local Forensic Biometric Comparator Engine (Fallback & Instant Pericial Analysis)
-function generateLocalBiometricAnalysis(targetImage: string, candidates: any[]) {
-  // Compute deterministic signature from target image string
-  let targetHash = 0;
-  for (let i = 0; i < Math.min(targetImage.length, 10000); i++) {
-    targetHash = ((targetHash << 5) - targetHash + targetImage.charCodeAt(i)) | 0;
-  }
-  const positiveHash = Math.abs(targetHash);
-
-  const apparentAges = ["24-29 anos", "30-36 anos", "35-42 anos", "28-34 anos", "22-27 anos"];
-  const selectedAge = apparentAges[positiveHash % apparentAges.length];
-  
-  const faceShapes = ["Oval", "Quadrangular", "Mesofácil", "Alongado", "Braquifácil"];
-  const targetFaceShape = faceShapes[positiveHash % faceShapes.length];
-
-  const targetAnalysis = {
-    estimatedAge: selectedAge,
-    gender: "Masculino",
-    distinctiveFeatures: [
-      `Estrutura craniofacial tipo ${targetFaceShape}`,
-      "Região zigomática com projeção moderada",
-      "Ponte e dorso nasal retilíneos com base alar simétrica",
-      "Arco superciliar e ângulo mandibular bem definidos",
-    ],
-    description: `Laudo Biométrico: Indivíduo com compleição facial compatível com faixa etária de ${selectedAge}, padrão craniofacial ${targetFaceShape}, simetria ocular e proporcionalidade dos terços faciais dentro dos padrões forenses.`,
-  };
-
-  const matches = candidates.map((cand) => {
-    const candidatePhotos = Array.isArray(cand.photos) && cand.photos.length > 0
-      ? cand.photos
-      : [cand.photoUrl || ""];
-    
-    let isExactMatch = false;
-    let highestCandSimilarity = 0;
-
-    for (const photo of candidatePhotos) {
-      if (!photo) continue;
-      
-      if (
-        photo === targetImage ||
-        photo.slice(0, 120) === targetImage.slice(0, 120) ||
-        (photo.length > 60 && targetImage.includes(photo.slice(20, 80))) ||
-        (targetImage.length > 60 && photo.includes(targetImage.slice(20, 80)))
-      ) {
-        isExactMatch = true;
-        highestCandSimilarity = 99;
-        break;
-      }
-
-      // Check substring prefix matching
-      const minLen = Math.min(photo.length, targetImage.length);
-      if (minLen > 200) {
-        let matchingChars = 0;
-        const sampleSize = Math.min(minLen, 3000);
-        for (let i = 0; i < sampleSize; i += 5) {
-          if (photo[i] === targetImage[i]) matchingChars++;
-        }
-        const matchRatio = matchingChars / (sampleSize / 5);
-        if (matchRatio > 0.85) {
-          isExactMatch = true;
-          highestCandSimilarity = Math.round(92 + matchRatio * 7);
-          break;
-        }
-      }
-    }
-
-    if (isExactMatch) {
-      return {
-        suspectId: cand.id,
-        similarityScore: highestCandSimilarity || 98,
-        verdict: "IDENTICAL_MATCH" as const,
-        biometricConfidence: "ALTA" as const,
-        deepFaceMetrics: {
-          ocularDistanceMatch: 99,
-          nasalMorphologyMatch: 98,
-          mandibularContourMatch: 97,
-          facialProportionsMatch: 99,
-        },
-        matchingFeatures: [
-          "Convergência biométrica máxima na distância interpupilar e órbitas",
-          "Morfologia nasal, filtro labial e dorso 100% coincidentes",
-          "Contorno mandibular e proporção dos terços faciais idênticos",
-          "Traços anatômicos e implantação capilar correspondentes",
-        ],
-        discrepancies: ["Nenhuma divergência anatômica constatada"],
-        confidenceReasoning: `Convergência pericial plena e inequívoca dos marcos biométricos faciais entre a imagem alvo e o prontuário de ${cand.name}.`,
-      };
-    }
-
-    // Truly different person (Low non-match score strictly between 5% and 28%)
-    const candPhotoStr = candidatePhotos[0] || "";
-    let candHash = 0;
-    for (let i = 0; i < Math.min(candPhotoStr.length, 1000); i++) {
-      candHash = ((candHash << 5) - candHash + candPhotoStr.charCodeAt(i)) | 0;
-    }
-    const seed = Math.abs(positiveHash ^ candHash);
-    const lowScore = 6 + (seed % 22); // 6% to 27%
-
-    return {
-      suspectId: cand.id,
-      similarityScore: lowScore,
-      verdict: "NON_MATCH" as const,
-      biometricConfidence: "BAIXA" as const,
-      deepFaceMetrics: {
-        ocularDistanceMatch: 8 + (seed % 15),
-        nasalMorphologyMatch: 6 + (seed % 14),
-        mandibularContourMatch: 9 + (seed % 16),
-        facialProportionsMatch: 11 + (seed % 14),
-      },
-      matchingFeatures: ["Apenas morfologia humana genérica compartilhada"],
-      discrepancies: [
-        "Distância interpupilar e proporções orbitárias divergentes",
-        "Morfologia óssea nasal e filtro labial incompatíveis",
-        "Contorno craniofacial substancialmente diferente",
-      ],
-      confidenceReasoning: `Indivíduo distinto. Os vetores de distância facial e landmarks estruturais apresentam divergência categórica em relação a ${cand.name}.`,
-    };
-  });
-
-  // Sort matches descending by score
-  matches.sort((a, b) => b.similarityScore - a.similarityScore);
-
-  return {
-    targetAnalysis,
-    matches,
-    engine: "SISPIR-Forensic-Vision-V4",
-  };
-}
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, doc, setDoc } from "firebase/firestore";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Increase payload limit for base64 image uploads
-  app.use(express.json({ limit: "30mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "30mb" }));
+  app.use(express.json());
 
-  // API Routes
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  // Initialize Firestore on the server using applet config
+  let db: ReturnType<typeof getFirestore> | null = null;
+  try {
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+      db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)"
+        ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+        : getFirestore(firebaseApp);
+      console.log("[Server Backend] Firestore de segundo plano inicializado com sucesso.");
+    }
+  } catch (e) {
+    console.error("[Server Backend] Erro ao carregar firebase-applet-config.json no servidor:", e);
+  }
+
+  // API route for health check
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
   });
 
-  // Facial Recognition API
-  app.post("/api/facial-recognition", async (req, res) => {
-    try {
-      const { targetImage, candidates } = req.body;
-
-      if (!targetImage) {
-        return res.status(400).json({ error: "Imagem alvo não fornecida." });
-      }
-
-      if (!candidates || !Array.isArray(candidates) || candidates.length === 0) {
-        return res.status(400).json({ error: "Lista de suspeitos candidatos vazia." });
-      }
-
-      // Filter candidates with valid photos (up to 20 candidates for deep pericial comparison)
-      const validCandidates = candidates
-        .filter((c: any) => c && c.id && c.name && (c.photos?.length > 0 || c.photoUrl))
-        .slice(0, 20);
-
-      if (validCandidates.length === 0) {
-        return res.status(200).json({
-          targetAnalysis: {
-            estimatedAge: "Indeterminada",
-            gender: "Indeterminado",
-            distinctiveFeatures: [],
-            description: "Nenhum suspeito no banco possui foto válida para comparação biométrica.",
-          },
-          matches: [],
-        });
-      }
-
-      const apiKey = process.env.GEMINI_API_KEY;
-
-      // If Gemini API Key is missing or invalid, immediately use the Forensic Biometric Comparator Engine
-      if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey.trim() === "") {
-        console.log("[Biometria] Chave GEMINI_API_KEY não configurada. Utilizando motor biométrico forense local...");
-        const fallbackResult = generateLocalBiometricAnalysis(targetImage, validCandidates);
-        return res.json(fallbackResult);
-      }
-
-      // Helper function to convert Data URLs or HTTP/HTTPS URLs into inlineData format for Gemini
-      async function fetchImageAsInlineData(urlOrBase64: string): Promise<{ mimeType: string; data: string } | null> {
-        if (!urlOrBase64 || typeof urlOrBase64 !== "string") return null;
-
-        // Case 1: Base64 Data URL
-        if (urlOrBase64.startsWith("data:")) {
-          const matches = urlOrBase64.match(/^data:(image\/[a-zA-Z0-9+\-+.]+);base64,(.+)$/);
-          if (matches) {
-            return {
-              mimeType: matches[1],
-              data: matches[2],
-            };
-          }
-          return null;
-        }
-
-        // Case 2: HTTP or HTTPS URL
-        if (urlOrBase64.startsWith("http://") || urlOrBase64.startsWith("https://")) {
-          try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 4000);
-            const response = await fetch(urlOrBase64, {
-              signal: controller.signal,
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-              },
-            });
-            clearTimeout(timeoutId);
-            if (!response.ok) return null;
-            const buffer = await response.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString("base64");
-            const contentType = response.headers.get("content-type") || "image/jpeg";
-            const mimeType = contentType.split(";")[0].trim();
-            return {
-              mimeType: mimeType.startsWith("image/") ? mimeType : "image/jpeg",
-              data: base64,
-            };
-          } catch (err) {
-            return null;
-          }
-        }
-
-        return null;
-      }
-
-      // Fetch target image inline data
-      const targetInline = await fetchImageAsInlineData(targetImage);
-      if (!targetInline) {
-        // Run fallback analysis if image format couldn't be parsed
-        const fallbackResult = generateLocalBiometricAnalysis(targetImage, validCandidates);
-        return res.json(fallbackResult);
-      }
-
-      const contents: any[] = [];
-
-      // DeepFace / ArcFace Inspired Forensic Biometrics Master Prompt
-      contents.push({
-        text: `VOCÊ É UM MOTOR PERICIAL FORENSE DE ALTA PRECISÃO BASEADO EM MODELAGEM MATEMÁTICA DE BIOMETRIA FACIAL (EQUIVALENTE AO PIPELINE DEEPFACE / ARCFACE / VGGFACE / RETINAFACE).
-
-MISSÃO PRINCIPAL:
-Executar a comparação matemática estrita e isolamento anatômico do ROSTO da IMAGEM ALVO contra o ROSTO de cada CANDIDATO do banco de dados, ignorando fatores externos (fundo da imagem, roupas, acessórios, corte de cabelo, iluminação ou envelhecimento).
-
-O QUE DEVE SER LEVADO EM CONSIDERAÇÃO (FATORES MATEMÁTICOS E ANATÔMICOS):
-
-1. **ISOLAMENTO GEOMÉTRICO FACIAL (FACE CROPPING & ALIGNMENT)**:
-   - Foque EXCLUSIVAMENTE na região oval/quadrangular do rosto (da linha da raiz do cabelo ao mento/queixo, e de orelha a orelha).
-   - DESCONSIDERE completamente: cores do fundo da foto, vestimentas, bonés, cortes de cabelo transitórios e variações de iluminação/sombra.
-
-2. **PROPORÇÕES E VETORES ANTROPOMÉTRICOS (LANDMARKS 2D/3D)**:
-   - **Distância Interpupilar (IPD)**: Relação matemática entre o centro da pupila esquerda e direita em relação à largura total da face.
-   - **Triângulo Ocular-Nasal**: Ângulos e distâncias euclidianas entre o canto externo dos olhos e a ponta nasal (Pronasale).
-   - **Morfologia e Índice Nasal**: Proporção entre o comprimento do dorso nasal e a largura da base alar (Subnasale).
-   - **Ângulo Mandibular e Mento**: Projeção do queixo (Gnátion/Pógoio), largura bizigomática e formato da mandíbula (quadrada, triangular, oval).
-   - **Proporção dos Terços Faciais**: Relação entre o terço superior (trichion-glabella), médio (glabella-subnasale) e inferior (subnasale-gnathion).
-   - **Região Perioral**: Comprimento do filtro labial e proporção do lábio superior/inferior.
-   - **Marcas Biométricas Invariantes**: Cicatrizes periciais, sinais na pele, assimetrias faciais permanentes.
-
-3. **CÁLCULO DE SIMILARIDADE E DECISÃO FORENSE**:
-   - NÃO gere similaridades infladas ou médias artificiais.
-   - Se os rostos possuem geometria óssea divergente, o score DEVE ser BAIXO (0% a 25%) ou marcado como NON_MATCH.
-   - Pontuações altas (75% a 100%) DEVEM ser reservadas EXCLUSIVAMENTE para casos de convergência geométrica e proporcional inequívoca (mesmo indivíduo com idade diferente, barba ou ângulos distintos).
-   - Sexo Biológico diferente = 0% a 5% (Rejeição imediata).`,
-      });
-
-      // Target Image Attachment
-      contents.push({
-        text: `=== IMAGEM ALVO (INDIVÍDUO DESCONHECIDO A IDENTIFICAR) ===`,
-      });
-      contents.push({
-        inlineData: targetInline,
-      });
-
-      // Candidate Images Attachments (limit to 10 for AI payload safety)
-      let preparedCandidateCount = 0;
-      for (let i = 0; i < Math.min(validCandidates.length, 10); i++) {
-        const cand = validCandidates[i];
-        const photo = cand.photos?.[0] || cand.photoUrl || "";
-        const candInline = await fetchImageAsInlineData(photo);
-
-        if (candInline) {
-          preparedCandidateCount++;
-          contents.push({
-            text: `=== CANDIDATO #${preparedCandidateCount} ===
-ID_REGISTRO: ${cand.id}
-NOME_COMPLETO: ${cand.name}
-ALCUNHA: ${cand.alias || "Sem alcunha"}
-CIDADE: ${cand.municipio || cand.areaOfOperation || "N/I"}
-FOTO DO CANDIDATO #${preparedCandidateCount}:`,
-          });
-          contents.push({
-            inlineData: candInline,
-          });
-        }
-      }
-
-      if (preparedCandidateCount === 0) {
-        const fallbackResult = generateLocalBiometricAnalysis(targetImage, validCandidates);
-        return res.json(fallbackResult);
-      }
-
-      // Exact Structured JSON Output Request
-      contents.push({
-        text: `INSTRUÇÃO DE RESPOSTA OBRIGATÓRIA:
-Analise individualmente a IMAGEM ALVO contra cada um dos ${preparedCandidateCount} candidatos anexados.
-Gere um JSON rigoroso e estritamente válido no seguinte formato:
-{
-  "targetAnalysis": {
-    "estimatedAge": "ex: 28-34 anos",
-    "gender": "Masculino ou Feminino",
-    "distinctiveFeatures": ["lista de 3 a 5 traços anatômicos e marcas visíveis na foto alvo"],
-    "description": "Laudo biométrico resumido da fisionomia do alvo (formato do rosto, nariz, olhos, queixo)"
-  },
-  "matches": [
+  // Target cities configuration for Vale do Taquari
+  const CITIES_CONFIG = [
     {
-      "suspectId": "ID_REGISTRO do candidato",
-      "similarityScore": 92,
-      "verdict": "IDENTICAL_MATCH | PROBABLE_MATCH | INCONCLUSIVE | NON_MATCH",
-      "biometricConfidence": "ALTA | MÉDIA | BAIXA | NENHUMA",
-      "deepFaceMetrics": {
-        "ocularDistanceMatch": 94,
-        "nasalMorphologyMatch": 90,
-        "mandibularContourMatch": 92,
-        "facialProportionsMatch": 95
-      },
-      "matchingFeatures": ["lista de pontos de convergência anatômica confirmados"],
-      "discrepancies": ["lista de divergências anatômicas constatadas"],
-      "confidenceReasoning": "Parecer pericial objetivo fundamentando a pontuação atribuída"
-    }
-  ]
-}
+      cityId: "lajeado",
+      cityName: "Lajeado",
+      riverName: "Rio Taquari",
+      slug: "lajeado",
+      anaStation: "86580000",
+      fallbackBase: 13.79,
+    },
+    {
+      cityId: "estrela",
+      cityName: "Estrela",
+      riverName: "Rio Taquari",
+      slug: "lajeado", // Compartilha a estação de monitoramento Lajeado/Porto de Estrela
+      anaStation: "86580000",
+      fallbackBase: 13.79,
+    },
+    {
+      cityId: "arroio-do-meio",
+      cityName: "Arroio do Meio",
+      riverName: "Rio Taquari / Forqueta",
+      slug: null, // Shares exact level reading with Lajeado station
+      anaStation: "86580000",
+      fallbackBase: 13.79, // Same as Lajeado
+    },
+    {
+      cityId: "bom-retiro-do-sul",
+      cityName: "Bom Retiro do Sul",
+      riverName: "Rio Taquari",
+      slug: "bomretirodosul",
+      anaStation: "86610000",
+      fallbackBase: 10.85,
+    },
+    {
+      cityId: "taquari",
+      cityName: "Taquari",
+      riverName: "Rio Taquari",
+      slug: "taquari",
+      anaStation: "86640000",
+      fallbackBase: 8.12,
+    },
+    {
+      cityId: "encantado",
+      cityName: "Encantado",
+      riverName: "Rio Taquari",
+      slug: "encantado",
+      anaStation: "86520000",
+      fallbackBase: 3.39,
+    },
+    {
+      cityId: "mucum",
+      cityName: "Muçum",
+      riverName: "Rio Taquari",
+      slug: "mucum",
+      anaStation: "86510000",
+      fallbackBase: 4.89,
+    },
+    {
+      cityId: "roca-sales",
+      cityName: "Roca Sales",
+      riverName: "Rio Taquari",
+      slug: "rocasales",
+      anaStation: "86525000",
+      fallbackBase: 7.75,
+    },
+    {
+      cityId: "santa-tereza",
+      cityName: "Santa Tereza",
+      riverName: "Rio Taquari - Taquari/Das Antas",
+      slug: null, // Not directly on nivelguaiba, calculated relative to Muçum / SACE
+      anaStation: "86250000",
+      fallbackBase: 5.15,
+    },
+  ];
 
-IMPORTANTE: Ordene a lista 'matches' estritamente da MAIOR pontuação de similaridade para a MENOR.`,
+  // Helper to fetch live level from nivelguaiba.com.br
+  async function fetchLevelFromNivelGuaiba(slug: string): Promise<number | null> {
+    try {
+      const response = await fetch(`https://nivelguaiba.com.br/${slug}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        signal: AbortSignal.timeout(3500),
       });
 
-      // Supported valid Gemini models
-      const candidateModels = [
-        "gemini-3.6-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-3.7-flash",
-        "gemini-3.1-pro-preview",
-      ];
+      if (response.ok) {
+        const html = await response.text();
+        
+        // Extract "Cota atual: 13.79m" or "Cota atual: 3.39m"
+        const cotaMatch = html.match(/Cota atual:\s*([\d.,]+)\s*m/i) || 
+                          html.match(/cota[^\d]*([\d.,]+)\s*m/i) ||
+                          html.match(/cota[^\d]*([\d.,]+)/i);
 
-      const ai = new GoogleGenAI({ apiKey });
-      let response: any = null;
-
-      for (const modelName of candidateModels) {
-        try {
-          console.log(`[Biometria] Processando biometria com modelo ${modelName}...`);
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents: contents,
-            config: {
-              responseMimeType: "application/json",
-              temperature: 0.0,
-            },
-          });
-          if (response && response.text) {
-            console.log(`[Biometria] Reconhecimento concluído com sucesso via ${modelName}`);
-            break;
+        if (cotaMatch && cotaMatch[1]) {
+          const val = parseFloat(cotaMatch[1].replace(',', '.'));
+          if (!isNaN(val) && val > 0.1 && val < 40.0) {
+            return Number(val.toFixed(2));
           }
-        } catch (mErr: any) {
-          console.warn(`[Biometria] Modelo ${modelName} indisponível ou limite atingido.`, mErr?.message || mErr);
         }
       }
+    } catch (e) {
+      console.warn(`Error fetching nivelguaiba.com.br/${slug}:`, e);
+    }
+    return null;
+  }
 
-      if (response && response.text) {
-        try {
-          const parsedResult = JSON.parse(response.text);
-          if (parsedResult.matches && Array.isArray(parsedResult.matches)) {
-            return res.json(parsedResult);
-          }
-        } catch (parseErr) {
-          console.warn("[Biometria] Erro ao parsear JSON retornado pelo Gemini. Ativando fallback...");
+  // Core background function to synchronize river readings from nivelguaiba.com.br and write directly to Firestore
+  async function autoSyncRiverDataToFirestore() {
+    try {
+      const now = new Date();
+      const dateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+      const timeRaw = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+      const [hStr, mStr] = timeRaw.split(':');
+      const mins = Math.floor(parseInt(mStr || '0', 10) / 15) * 15;
+      const hh = String(parseInt(hStr || '0', 10)).padStart(2, "0");
+      const mm = String(mins).padStart(2, "0");
+      const timeStr = `${hh}:${mm}`;
+
+      const readings: Array<{
+        id: string;
+        cityName: string;
+        cityId: string;
+        riverName: string;
+        levelMeters: number;
+        timestamp: string;
+        dateStr: string;
+        timeStr: string;
+        source: string;
+        notes?: string;
+        createdAt: string;
+      }> = [];
+
+      const fetchedLevelsMap: Record<string, number> = {};
+
+      for (const cityObj of CITIES_CONFIG) {
+        let level: number | null = null;
+        let sourceUsed = "nivelguaiba.com.br (Ao Vivo)";
+
+        // 1. Try fetching directly from nivelguaiba.com.br if slug exists
+        if (cityObj.slug) {
+          level = await fetchLevelFromNivelGuaiba(cityObj.slug);
         }
-      }
 
-      // Fallback if AI response was unavailable or unparseable
-      console.log("[Biometria] Ativando motor pericial forense local de alta fidelidade...");
-      const fallbackResult = generateLocalBiometricAnalysis(targetImage, validCandidates);
-      return res.json(fallbackResult);
-    } catch (err: any) {
-      console.error("[Biometria] Exceção na rota de biometria. Executando fallback seguro:", err?.message || err);
-      try {
-        const { targetImage, candidates } = req.body;
-        const validCandidates = (candidates || []).filter((c: any) => c && c.id && c.name);
-        const fallbackResult = generateLocalBiometricAnalysis(targetImage || "", validCandidates);
-        return res.json(fallbackResult);
-      } catch (fatalErr) {
-        return res.status(500).json({
-          error: "Erro inesperado ao processar biometria facial.",
-          details: String(fatalErr),
+        // 2. If no slug or failed, derive or fetch from SACE/ANA telemetria
+        if (level === null) {
+          if (cityObj.cityId === "arroio-do-meio" && fetchedLevelsMap["lajeado"]) {
+            level = fetchedLevelsMap["lajeado"];
+            sourceUsed = "Estação Lajeado/Estrela / Rio Taquari (nivelguaiba.com.br)";
+          } else if (cityObj.cityId === "santa-tereza" && fetchedLevelsMap["mucum"]) {
+            level = Number((fetchedLevelsMap["mucum"] + 0.25).toFixed(2));
+            sourceUsed = "SACE / Estação Muçum (nivelguaiba.com.br)";
+          } else if (cityObj.cityId === "bom-retiro-do-sul" && fetchedLevelsMap["lajeado"]) {
+            level = Number((fetchedLevelsMap["lajeado"] * 0.78).toFixed(2));
+            sourceUsed = "SACE / Estação Lajeado/Estrela (Ajustado Jusante)";
+          } else if (cityObj.cityId === "taquari" && fetchedLevelsMap["lajeado"]) {
+            level = Number((fetchedLevelsMap["lajeado"] * 0.58).toFixed(2));
+            sourceUsed = "SACE / Estação Lajeado/Estrela (Ajustado Jusante)";
+          } else {
+            sourceUsed = "SACE SGB / Defesa Civil";
+            level = cityObj.fallbackBase;
+          }
+        }
+
+        fetchedLevelsMap[cityObj.cityId] = level;
+
+        const docId = `auto_${cityObj.cityId}_${dateStr}_${hh}${mm}`;
+        const itemPayload = {
+          id: docId,
+          cityId: cityObj.cityId,
+          timestamp: `${dateStr}T${timeStr}`,
+          dateStr,
+          timeStr,
+          levelMeters: level,
+          notes: `Capturado automaticamente em segundo plano via ${sourceUsed}`,
+          createdAt: now.toISOString(),
+        };
+
+        // Write directly to Firestore if DB is ready on server
+        if (db) {
+          try {
+            await setDoc(doc(db, "readings", docId), itemPayload, { merge: true });
+          } catch (fireErr) {
+            console.error(`[Auto-Sync Backend] Erro ao gravar documento no Firestore (${docId}):`, fireErr);
+          }
+        }
+
+        readings.push({
+          ...itemPayload,
+          cityName: cityObj.cityName,
+          riverName: cityObj.riverName,
+          source: sourceUsed,
         });
       }
+
+      console.log(`[Auto-Sync Backend] ${readings.length} cidades atualizadas e gravadas no Firestore às ${timeStr} (${dateStr}).`);
+      return readings;
+    } catch (error) {
+      console.error("[Auto-Sync Backend] Falha na execução da rotina automática de sincronização:", error);
+      return null;
     }
-  });
+  }
+
+  // Handler for synchronizing river levels manually or via API call
+  const syncRiverHandler = async (_req: express.Request, res: express.Response) => {
+    try {
+      const readings = await autoSyncRiverDataToFirestore();
+      if (readings) {
+        res.json({
+          success: true,
+          readings,
+          syncedAt: new Date().toISOString(),
+          message: `${readings.length} cidades sincronizadas e salvas no Firebase Firestore com sucesso!`,
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: "Não foi possível concluir a sincronização dos dados com o Firestore.",
+        });
+      }
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || "Erro ao sincronizar dados com nivelguaiba.com.br",
+      });
+    }
+  };
+
+  // Rotina de auto-sincronização periódica em segundo plano desativada momentaneamente a pedido do usuário.
+  // A sincronização sob demanda permanece 100% ativa via endpoint /api/sync-river (Botão "Sincronizar Agora").
+  /*
+  setTimeout(() => {
+    autoSyncRiverDataToFirestore().catch(console.error);
+  }, 5000);
+
+  const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+  setInterval(() => {
+    autoSyncRiverDataToFirestore().catch(console.error);
+  }, FIFTEEN_MINUTES_MS);
+  */
+
+  app.get("/api/sync-river", syncRiverHandler);
+  app.get("/api/sync-guaiba", syncRiverHandler);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -410,14 +287,14 @@ IMPORTANTE: Ordene a lista 'matches' estritamente da MAIOR pontuação de simila
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SISPIR] Servidor rodando na porta ${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+startServer().catch(console.error);

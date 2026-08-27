@@ -1,24 +1,120 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
-@theme {
-  --font-sans: "Inter", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-/* Custom Scrollbars to keep UI incredibly clean */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #050507;
-}
-::-webkit-scrollbar-thumb {
-  background: #1c1c26;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #2d2d3a;
+/* Leaflet map styles and marker reset */
+.leaflet-container {
+  font-family: inherit;
+  z-index: 1;
+  background-color: #020617 !important; /* slate-950 background while tiles load */
 }
 
+/* Reset default white box background on custom Leaflet divIcons */
+.leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.custom-roadblock-marker,
+.picker-roadblock-marker {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Styled Leaflet Popups */
+.leaflet-popup-content-wrapper {
+  background-color: #0f172a !important; /* slate-900 */
+  color: #f8fafc !important; /* slate-50 */
+  border: 1px solid #334155 !important; /* slate-700 */
+  border-radius: 1rem !important;
+  padding: 4px !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 14px !important;
+  line-height: 1.5 !important;
+}
+
+.leaflet-popup-tip {
+  background-color: #0f172a !important;
+  border: 1px solid #334155 !important;
+}
+
+.leaflet-popup-close-button {
+  color: #94a3b8 !important;
+  padding: 8px 10px !important;
+  font-size: 16px !important;
+}
+
+.leaflet-popup-close-button:hover {
+  color: #f8fafc !important;
+}
+
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt;
+  }
+
+  .no-print,
+  .print\:hidden,
+  button,
+  header nav,
+  input,
+  select,
+  .backdrop-blur-md {
+    display: none !important;
+  }
+
+  .bg-slate-950,
+  .bg-slate-900,
+  .bg-slate-800 {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: none !important;
+  }
+
+  .text-white,
+  .text-slate-100,
+  .text-slate-200,
+  .text-slate-300 {
+    color: #0f172a !important;
+  }
+
+  .text-slate-400,
+  .text-slate-500 {
+    color: #475569 !important;
+  }
+
+  .border-slate-800,
+  .border-slate-700 {
+    border-color: #cbd5e1 !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 6px 10px !important;
+    color: #0f172a !important;
+  }
+
+  body::before {
+    content: "RELATÓRIO DE MONITORAMENTO HIDROLÓGICO E ABRIGOS - RS";
+    display: block;
+    text-align: center;
+    font-size: 14pt;
+    font-weight: bold;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #0284c7;
+    color: #0284c7;
+  }
+}

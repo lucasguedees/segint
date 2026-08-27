@@ -1,13 +1,12 @@
 {
-  "projectId": "segint",
-  "appId": "1:962467301106:web:6a9d97dfe25f91fa38726b",
-  "apiKey": "AIzaSyAlf0XHG3TPnmfkZTkmfTHewdPWwqnq0LE",
-  "authDomain": "segint.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
-  "storageBucket": "segint.firebasestorage.app",
-  "messagingSenderId": "962467301106",
-  "measurementId": "G-XJRMEVB7V9",
-  "oAuthClientId": "",
+  "projectId": "hardy-booking-vj4jh",
+  "appId": "1:344627645898:web:5b2b88aaa0f19ec9c11333",
+  "apiKey": "AIzaSyBmtCfeNYNEAbNz2ftRTmOYla6noZvdyv4",
+  "authDomain": "hardy-booking-vj4jh.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-monitoramentodee-7edf87df-a99b-458c-be83-277da0381d71",
+  "storageBucket": "hardy-booking-vj4jh.firebasestorage.app",
+  "messagingSenderId": "344627645898",
+  "measurementId": "",
+  "oAuthClientId": "344627645898-hp62koqrhsko62fnohp3ijv2suuhba29.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
-

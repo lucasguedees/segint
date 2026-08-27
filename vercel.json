@@ -1,7 +1,13 @@
 {
+  "crons": [
+    {
+      "path": "/api/sync-river",
+      "schedule": "*/15 * * * *"
+    }
+  ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]
